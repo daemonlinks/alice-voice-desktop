@@ -6,43 +6,36 @@ using Serilog;
 namespace AliceVoice.Core.Voice;
 
 /// <summary>
-/// Raised when the relay sends a text event (transcript, reply, lifecycle).
+/// State 2 — the alice_voice Hermes agent. Uses the agent's voice settings and
+/// provider/model settings (hermes provider, model = alice_voice). Connects to
+/// the agent endpoint and speaks the same WebSocket protocol as the relay.
 /// </summary>
-public sealed record VoiceEvent(string Type, string? Text, JsonElement? Payload);
-
-/// <summary>
-/// Client for the Alice Voice relay (ws://localhost:9876). Speaks the same
-/// WebSocket protocol as the web app: sends 16 kHz mono Int16 PCM frames for
-/// STT, receives transcript/reply_text events and TTS audio chunks.
-/// </summary>
-public interface IVoiceClient : IAsyncDisposable
-{
-    event Action<VoiceEvent>? EventReceived;
-    event Action<byte[]>? AudioReceived;
-
-    Task ConnectAsync(Uri uri, CancellationToken ct = default);
-    Task SendAudioAsync(short[] pcm16k, CancellationToken ct = default);
-    Task SendCommandAsync(string type, object? payload = null, CancellationToken ct = default);
-    bool IsConnected { get; }
-}
-
-public sealed class RelayVoiceClient : IVoiceClient
+public sealed class AliceVoiceAgentBackend : IVoiceBackend
 {
     private readonly ClientWebSocket _ws = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private CancellationTokenSource? _cts;
     private Task? _receiveLoop;
 
-    public event Action<VoiceEvent>? EventReceived;
+    public VoiceBackendKind Kind => VoiceBackendKind.AliceVoiceAgent;
+    public VoiceBackendSettings Settings { get; private set; } = VoiceBackendSettings.For(VoiceBackendKind.AliceVoiceAgent);
+
+    public event Action<BackendEvent>? EventReceived;
     public event Action<byte[]>? AudioReceived;
 
     public bool IsConnected => _ws.State == WebSocketState.Open;
 
-    public async Task ConnectAsync(Uri uri, CancellationToken ct = default)
+    public async Task ConnectAsync(VoiceBackendSettings settings, CancellationToken ct = default)
     {
+        Settings = settings;
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        await _ws.ConnectAsync(uri, _cts.Token);
-        Log.Information("Connected to Alice Voice relay at {Uri}", uri);
+        await _ws.ConnectAsync(new Uri(settings.AgentEndpoint), _cts.Token);
+        Log.Information("alice_voice agent backend connected at {Url}", settings.AgentEndpoint);
+
+        // Tell the agent which provider/model/voice to use.
+        await SendCommandAsync("switch_model", new { mode = settings.Provider, model = settings.Model }, ct);
+        await SendCommandAsync("set_voice", new { voice = settings.TtsVoice }, ct);
+
         _receiveLoop = Task.Run(() => ReceiveLoop(_cts.Token), _cts.Token);
     }
 
@@ -57,17 +50,13 @@ public sealed class RelayVoiceClient : IVoiceClient
     {
         var msg = new Dictionary<string, object?> { ["type"] = type };
         if (payload is not null) msg["payload"] = payload;
-        var json = JsonSerializer.Serialize(msg);
-        await SendTextAsync(json, ct);
+        await SendTextAsync(JsonSerializer.Serialize(msg), ct);
     }
 
     private async Task SendBinaryAsync(byte[] data, CancellationToken ct)
     {
         await _sendLock.WaitAsync(ct);
-        try
-        {
-            await _ws.SendAsync(data, WebSocketMessageType.Binary, true, ct);
-        }
+        try { await _ws.SendAsync(data, WebSocketMessageType.Binary, true, ct); }
         finally { _sendLock.Release(); }
     }
 
@@ -108,24 +97,18 @@ public sealed class RelayVoiceClient : IVoiceClient
                         var type = doc.RootElement.GetProperty("type").GetString() ?? "unknown";
                         var payload = doc.RootElement.TryGetProperty("payload", out var p) ? (JsonElement?)p : null;
                         var textVal = payload?.TryGetProperty("text", out var t) == true ? t.GetString() : null;
-                        EventReceived?.Invoke(new VoiceEvent(type, textVal, payload));
+                        EventReceived?.Invoke(new BackendEvent(type, textVal));
                     }
                     catch (JsonException ex)
                     {
-                        Log.Warning(ex, "Unparseable relay message: {Text}", text);
+                        Log.Warning(ex, "Unparseable agent message: {Text}", text);
                     }
                 }
             }
         }
         catch (OperationCanceledException) { }
-        catch (WebSocketException ex)
-        {
-            Log.Warning(ex, "Relay WebSocket closed");
-        }
-        finally
-        {
-            Log.Information("Relay receive loop ended");
-        }
+        catch (WebSocketException ex) { Log.Warning(ex, "alice_voice agent WebSocket closed"); }
+        finally { Log.Information("alice_voice agent receive loop ended"); }
     }
 
     public async ValueTask DisposeAsync()
@@ -139,10 +122,7 @@ public sealed class RelayVoiceClient : IVoiceClient
         catch { }
         _ws.Dispose();
         _sendLock.Dispose();
-        if (_receiveLoop is not null)
-        {
-            try { await _receiveLoop; } catch { }
-        }
+        if (_receiveLoop is not null) { try { await _receiveLoop; } catch { } }
         _cts?.Dispose();
     }
 }

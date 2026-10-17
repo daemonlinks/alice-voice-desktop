@@ -15,7 +15,7 @@ public sealed partial class MainWindow : Window
     private readonly IGpuSelector _gpu;
     private readonly IWhisperEngine _whisper;
     private readonly IAppUpdater _updater;
-    private readonly IVoiceClient _voice;
+    private readonly IVoiceBackendManager _voice;
     private readonly IMicrophoneCapture _mic;
     private readonly ITtsPlayback _tts;
 
@@ -28,7 +28,7 @@ public sealed partial class MainWindow : Window
         _gpu = App.Services.GetRequiredService<IGpuSelector>();
         _whisper = App.Services.GetRequiredService<IWhisperEngine>();
         _updater = App.Services.GetRequiredService<IAppUpdater>();
-        _voice = App.Services.GetRequiredService<IVoiceClient>();
+        _voice = App.Services.GetRequiredService<IVoiceBackendManager>();
         _mic = App.Services.GetRequiredService<IMicrophoneCapture>();
         _tts = App.Services.GetRequiredService<ITtsPlayback>();
 
@@ -44,14 +44,14 @@ public sealed partial class MainWindow : Window
             var gpu = _gpu.PreferredInferenceGpu;
             GpuText.Text = $"GPU: {gpu.Name} (idx {gpu.Index}, {gpu.TotalMemoryMiB} MiB)";
             EngineText.Text = "Engine: ONNX Runtime + DirectML";
-            StatusText.Text = "Connecting to relay…";
+            StatusText.Text = "Connecting…";
 
             // Warm the Whisper model on the inference GPU (local fallback path).
             await _whisper.WarmUpAsync();
 
-            // Connect to the Alice Voice relay (reuses STT/TTS/LLM/Honcho backend).
-            await _voice.ConnectAsync(new Uri("ws://localhost:9876"));
-            StatusText.Text = "Ready — connected to relay";
+            // Start on the relay backend (default state).
+            await _voice.SwitchToAsync(VoiceBackendKind.Relay);
+            StatusText.Text = "Ready — relay backend";
             Log.Information("Alice Voice started. Inference GPU: {Gpu}", gpu.Name);
 
             // Check for updates in the background (non-blocking).
@@ -64,7 +64,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void OnVoiceEvent(VoiceEvent evt)
+    private void OnVoiceEvent(BackendEvent evt)
     {
         // Marshal to UI thread.
         DispatcherQueue.TryEnqueue(() =>
@@ -86,6 +86,9 @@ public sealed partial class MainWindow : Window
                 case "wake_detected":
                     StatusText.Text = "Wake word heard — listening";
                     break;
+                case "backend_switched":
+                    StatusText.Text = evt.Text;
+                    break;
                 case "error":
                     StatusText.Text = $"Error: {evt.Text}";
                     break;
@@ -101,7 +104,7 @@ public sealed partial class MainWindow : Window
 
     private void OnMicFrame(float[] pcm16k)
     {
-        // Convert float 16k mono to Int16 and send to relay for STT.
+        // Convert float 16k mono to Int16 and send to the current backend for STT.
         var shorts = new short[pcm16k.Length];
         for (int i = 0; i < pcm16k.Length; i++)
         {
@@ -115,6 +118,31 @@ public sealed partial class MainWindow : Window
     {
         TranscriptPanel.Children.Add(new TextBlock { Text = line, TextWrapping = TextWrapping.Wrap });
         TranscriptScroll.ChangeView(null, TranscriptScroll.ScrollableHeight, null);
+    }
+
+    private async void BackendSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (BackendSelector.SelectedItem is not ComboBoxItem item) return;
+        if (item.Tag is not string tag) return;
+
+        var kind = tag switch
+        {
+            "relay" => VoiceBackendKind.Relay,
+            "agent" => VoiceBackendKind.AliceVoiceAgent,
+            "ollama" => VoiceBackendKind.LocalOllama,
+            _ => VoiceBackendKind.Relay
+        };
+
+        try
+        {
+            StatusText.Text = $"Switching to {kind}…";
+            await _voice.SwitchToAsync(kind);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Switch failed: {ex.Message}";
+            Log.Error(ex, "Backend switch to {Kind} failed", kind);
+        }
     }
 
     private async void TalkButton_Click(object sender, RoutedEventArgs e)

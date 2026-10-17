@@ -12,7 +12,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IGpuSelector, NvidiaGpuSelector>();
         services.AddSingleton<IAppUpdater>(_ => new HttpAppUpdater(
             "https://raw.githubusercontent.com/daemonlinks/alice-voice-desktop/main/version.json"));
-        services.AddSingleton<IVoiceClient, RelayVoiceClient>();
+        services.AddSingleton<IVoiceBackendManager, VoiceBackendManager>();
         return services;
     }
 }
