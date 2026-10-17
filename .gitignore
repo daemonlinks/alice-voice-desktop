@@ -1,0 +1,24 @@
+# Build output
+bin/
+obj/
+*.user
+*.suo
+
+# Windows App SDK
+*.appx
+*.appxbundle
+*.msix
+*.msixbundle
+AppPackages/
+
+# Logs
+logs/
+*.log
+
+# Local app data
+LocalAppData/
+
+# IDE
+.vs/
+.idea/
+*.swp
