@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using AliceVoice.Core.Gpu;
 using AliceVoice.Core.Updates;
+using AliceVoice.Core.Voice;
 
 namespace AliceVoice.Core;
 
@@ -11,6 +12,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IGpuSelector, NvidiaGpuSelector>();
         services.AddSingleton<IAppUpdater>(_ => new HttpAppUpdater(
             "https://raw.githubusercontent.com/daemonlinks/alice-voice-desktop/main/version.json"));
+        services.AddSingleton<IVoiceClient, RelayVoiceClient>();
         return services;
     }
 }
