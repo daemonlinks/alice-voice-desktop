@@ -92,9 +92,9 @@ public sealed partial class MainWindow : Window
                 LoadBackgrounds();
                 LoadMemberVoices();
                 await _whisper.WarmUpAsync();
-            await _voice.SwitchToAsync(VoiceBackendKind.AliceVoiceAgent);
-            SetConnected(true);
-            Log.Information("Alice Voice started");
+            await _voice.SwitchToAsync(VoiceBackendKind.AliceLocal);
+                        SetConnected(true);
+                        Log.Information("Alice Voice started");
             _ = CheckForUpdatesAsync();
             _ = LoadVoicesForSelectedProviderAsync();
             AppendSystem("Talk to me, Master.");
@@ -689,7 +689,10 @@ public sealed partial class MainWindow : Window
 
     private async void BackendSelect_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (BackendSelect.SelectedItem is not ComboBoxItem ci || ci.Tag is not string tag) return;
+            // The dropdown defaults to Alice LOCAL (IsSelected=True), which fires this
+            // handler mid-XAML-parse before _voice is resolved — guard it.
+            if (_voice is null) return;
+                if (BackendSelect.SelectedItem is not ComboBoxItem ci || ci.Tag is not string tag) return;
             var kind = tag == "alice_local" ? VoiceBackendKind.AliceLocal : VoiceBackendKind.AliceVoiceAgent;
             StatusText.Text = $"Switching to {ci.Content}…";
             try

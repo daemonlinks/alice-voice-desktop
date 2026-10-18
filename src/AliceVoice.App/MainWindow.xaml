@@ -47,8 +47,8 @@
                                     <StackPanel Orientation="Horizontal" Spacing="4">
                                         <TextBlock Text="Backend" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
                                         <ComboBox x:Name="BackendSelect" MinWidth="120" VerticalAlignment="Center" SelectionChanged="BackendSelect_SelectionChanged">
-                                            <ComboBoxItem Content="Agent" Tag="agent" IsSelected="True"/>
-                                            <ComboBoxItem Content="Alice LOCAL" Tag="alice_local"/>
+                                                                                    <ComboBoxItem Content="Alice LOCAL" Tag="alice_local" IsSelected="True"/>
+                                                                                    <ComboBoxItem Content="Agent" Tag="agent"/>
                                         </ComboBox>
                                     </StackPanel>
                                     <StackPanel Orientation="Horizontal" Spacing="4">
