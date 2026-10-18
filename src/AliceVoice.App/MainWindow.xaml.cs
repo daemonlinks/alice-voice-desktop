@@ -74,10 +74,11 @@ public sealed partial class MainWindow : Window
         _voice.AudioReceived += OnVoiceAudio;
         _mic.AudioFrameCaptured += OnMicFrame;
 
-        // Populate the fleet selector.
-                foreach (var m in FleetRoster.Members)
-                                    FleetSelector.Items.Add(new ComboBoxItem { Content = m.DisplayName, Tag = m.Name });
-                                FleetSelector.SelectedIndex = 0;
+        // Populate the agent selector: Alice LOCAL first, then fleet members.
+                        FleetSelector.Items.Add(new ComboBoxItem { Content = "Alice LOCAL", Tag = "alice_local" });
+                        foreach (var m in FleetRoster.Members)
+                                            FleetSelector.Items.Add(new ComboBoxItem { Content = m.DisplayName, Tag = m.Name });
+                                        FleetSelector.SelectedIndex = 0;
 
         // Populate the voice provider selector from the registered providers.
                 foreach (var p in _voiceProvider.Providers)
@@ -232,6 +233,9 @@ public sealed partial class MainWindow : Window
 
     private string? SelectedMemberName =>
         FleetSelector.SelectedItem is ComboBoxItem item && item.Tag is string name ? name : null;
+
+    private bool IsAliceLocalSelected =>
+        FleetSelector.SelectedItem is ComboBoxItem item && item.Tag is string name && name == "alice_local";
 
     private VoiceProviderKind? SelectedProvider =>
         VoiceProviderSelect.SelectedItem is ComboBoxItem item && item.Tag is VoiceProviderKind kind ? kind : null;
@@ -613,79 +617,106 @@ public sealed partial class MainWindow : Window
     }
 
     private async Task SendChatAsync()
-    {
-        var member = SelectedMember;
-        var text = ChatInput.Text?.Trim();
-        if (member is null || string.IsNullOrEmpty(text)) return;
-
-        ChatInput.Text = "";
-        AppendUser($"{text} → {member.DisplayName}");
-        StatusText.Text = $"Talking to {member.DisplayName}…";
-
-        try
         {
-            var reply = await _chat.SendAsync(member, text);
-            AppendAlice(reply);
-            StatusText.Text = $"Replied from {member.DisplayName}";
-            if (!string.IsNullOrWhiteSpace(reply))
+            var member = SelectedMember;
+            var text = ChatInput.Text?.Trim();
+            if (string.IsNullOrEmpty(text)) return;
+            if (member is null && !IsAliceLocalSelected) return;
+
+            ChatInput.Text = "";
+
+            // Alice LOCAL (first Agent entry) talks to the local backend, not fleet chat.
+            if (IsAliceLocalSelected)
             {
-                PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-                await _voiceProvider.SpeakAsync(CurrentMemberProfile, reply);
-                PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
+                AppendUser($"{text} → Alice LOCAL");
+                            StatusText.Text = "Talking to Alice LOCAL…";
+                            try
+                            {
+                                var local = _voice.Current as AliceLocalBackend;
+                                var reply = local is null ? string.Empty : await local.AskAsync(text);
+                                AppendAlice(reply);
+                    StatusText.Text = "Replied from Alice LOCAL";
+                    if (!string.IsNullOrWhiteSpace(reply))
+                    {
+                        PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
+                        await _voiceProvider.SpeakAsync(CurrentMemberProfile, reply);
+                        PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppendSystem($"(no reply — {ex.Message})");
+                    StatusText.Text = $"Chat failed: {ex.Message}";
+                    Log.Error(ex, "Alice LOCAL chat failed");
+                }
+                return;
             }
-        }
-        catch (Exception ex)
-        {
-            AppendSystem($"{member.DisplayName}: (no reply — {ex.Message})");
-            StatusText.Text = $"Chat failed: {ex.Message}";
-            Log.Error(ex, "Fleet chat to {Member} failed", member.Name);
-        }
-    }
 
-    private async void BackendSelect_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            // The dropdown defaults to Alice LOCAL (IsSelected=True), which fires this
-            // handler mid-XAML-parse before _voice is resolved — guard it.
-            if (_voice is null) return;
-                if (BackendSelect.SelectedItem is not ComboBoxItem ci || ci.Tag is not string tag) return;
-            var kind = tag == "alice_local" ? VoiceBackendKind.AliceLocal : VoiceBackendKind.AliceVoiceAgent;
-            StatusText.Text = $"Switching to {ci.Content}…";
+            AppendUser($"{text} → {member.DisplayName}");
+            StatusText.Text = $"Talking to {member.DisplayName}…";
+
             try
-                        {
-                            await _voice.SwitchToAsync(kind);
-                            // If we left Alice LOCAL while in SOUL mode, exit the editor.
-                            if (_mode == "soul" && kind != VoiceBackendKind.AliceLocal)
-                                SetMode(_lastNonSoulMode);
-                            StatusText.Text = $"Backend: {ci.Content}";
+            {
+                var reply = await _chat.SendAsync(member, text);
+                AppendAlice(reply);
+                StatusText.Text = $"Replied from {member.DisplayName}";
+                if (!string.IsNullOrWhiteSpace(reply))
+                {
+                    PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
+                    await _voiceProvider.SpeakAsync(CurrentMemberProfile, reply);
+                    PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
+                }
             }
             catch (Exception ex)
             {
-                StatusText.Text = $"Backend switch failed: {ex.Message}";
-                Log.Error(ex, "Backend switch to {Kind} failed", kind);
+                AppendSystem($"{member.DisplayName}: (no reply — {ex.Message})");
+                StatusText.Text = $"Chat failed: {ex.Message}";
+                Log.Error(ex, "Fleet chat to {Member} failed", member.Name);
             }
         }
 
-        private async void FleetSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            var member = SelectedMember;
-            if (member is null) return;
-            // Load the member's saved voice assignment into the dropdowns.
-            if (SelectedMemberName is string name && _memberVoices.TryGetValue(name, out var saved))
+    private async void FleetSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
             {
-                foreach (var item in VoiceProviderSelect.Items)
-                    if (item is ComboBoxItem pi && pi.Tag is VoiceProviderKind pk && pk == saved.Provider)
-                    { VoiceProviderSelect.SelectedItem = pi; break; }
-                await LoadVoicesForSelectedProviderAsync();
-                foreach (var item in VoiceSelect.Items)
-                    if (item is ComboBoxItem vi && vi.Tag?.ToString() == saved.Voice)
-                    { VoiceSelect.SelectedItem = vi; break; }
+                // Alice LOCAL is the first Agent entry — selecting it uses the local backend.
+                if (IsAliceLocalSelected)
+                {
+                    StatusText.Text = "Switching to Alice LOCAL…";
+                    try
+                    {
+                        await _voice.SwitchToAsync(VoiceBackendKind.AliceLocal);
+                        StatusText.Text = "Alice LOCAL";
+                    }
+                    catch (Exception ex)
+                    {
+                        StatusText.Text = $"Alice LOCAL switch failed: {ex.Message}";
+                        Log.Error(ex, "Alice LOCAL switch failed");
+                    }
+                    return;
+                }
+
+                var member = SelectedMember;
+                if (member is null) return;
+                // A fleet member uses the agent backend — switch to it.
+                try { await _voice.SwitchToAsync(VoiceBackendKind.AliceVoiceAgent); }
+                catch (Exception ex) { Log.Error(ex, "Agent switch failed"); }
+
+                // Load the member's saved voice assignment into the dropdowns.
+                if (SelectedMemberName is string name && _memberVoices.TryGetValue(name, out var saved))
+                {
+                    foreach (var item in VoiceProviderSelect.Items)
+                        if (item is ComboBoxItem pi && pi.Tag is VoiceProviderKind pk && pk == saved.Provider)
+                        { VoiceProviderSelect.SelectedItem = pi; break; }
+                    await LoadVoicesForSelectedProviderAsync();
+                    foreach (var item in VoiceSelect.Items)
+                        if (item is ComboBoxItem vi && vi.Tag?.ToString() == saved.Voice)
+                        { VoiceSelect.SelectedItem = vi; break; }
+                }
+                StatusText.Text = $"Checking {member.DisplayName}…";
+                var reachable = await _chat.IsReachableAsync(member);
+                StatusText.Text = reachable
+                    ? $"{member.DisplayName} reachable"
+                    : $"{member.DisplayName} not reachable (no API key / not served)";
             }
-            StatusText.Text = $"Checking {member.DisplayName}…";
-            var reachable = await _chat.IsReachableAsync(member);
-            StatusText.Text = reachable
-                ? $"{member.DisplayName} reachable"
-                : $"{member.DisplayName} not reachable (no API key / not served)";
-        }
 
     // ── PTT ──
     private async void TalkButton_Click(object sender, RoutedEventArgs e)
