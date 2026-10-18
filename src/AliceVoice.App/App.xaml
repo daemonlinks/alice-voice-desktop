@@ -7,6 +7,32 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- Web-app dark theme palette (app-wide) -->
+            <SolidColorBrush x:Key="AppBg" Color="#0A0A0F"/>
+            <SolidColorBrush x:Key="AppSurface" Color="#1A1A22"/>
+            <SolidColorBrush x:Key="AppBorder" Color="#1F1F2A"/>
+            <SolidColorBrush x:Key="AppText" Color="#E8E8ED"/>
+            <SolidColorBrush x:Key="AppTextDim" Color="#73737E"/>
+            <SolidColorBrush x:Key="AppAccent" Color="#FF3B3B"/>
+            <SolidColorBrush x:Key="AppGreen" Color="#22C55E"/>
+            <SolidColorBrush x:Key="AppYellow" Color="#EAB308"/>
+            <SolidColorBrush x:Key="AppRed" Color="#EF4444"/>
+            <SolidColorBrush x:Key="AppBlue" Color="#3B82F6"/>
+
+            <Style x:Key="ChipButton" TargetType="Button">
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="Foreground" Value="{StaticResource AppTextDim}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="BorderBrush" Value="{StaticResource AppBorder}"/>
+                <Setter Property="CornerRadius" Value="8"/>
+                <Setter Property="Padding" Value="10,4"/>
+                <Setter Property="FontSize" Value="12"/>
+            </Style>
+            <Style x:Key="ChipButtonActive" TargetType="Button" BasedOn="{StaticResource ChipButton}">
+                <Setter Property="Foreground" Value="{StaticResource AppAccent}"/>
+                <Setter Property="BorderBrush" Value="{StaticResource AppAccent}"/>
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

@@ -78,8 +78,8 @@ public sealed partial class MainWindow : Window
     private void SetConnected(bool connected)
     {
         ConnDot.Fill = connected
-            ? (Microsoft.UI.Xaml.Media.Brush)RootGrid.Resources["AppGreen"]
-            : (Microsoft.UI.Xaml.Media.Brush)RootGrid.Resources["AppTextDim"];
+            ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"]
+            : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
         ConnText.Text = connected ? "Connected" : "Connect";
         PresenceText.Text = connected ? "here with you" : "offline";
     }
@@ -88,16 +88,16 @@ public sealed partial class MainWindow : Window
     private void FacetAlice_Click(object sender, RoutedEventArgs e)
     {
         _facet = "alice";
-        FacetAliceBtn.Style = (Style)RootGrid.Resources["ChipButtonActive"];
-        FacetPlumBtn.Style = (Style)RootGrid.Resources["ChipButton"];
+        FacetAliceBtn.Style = (Style)Application.Current.Resources["ChipButtonActive"];
+        FacetPlumBtn.Style = (Style)Application.Current.Resources["ChipButton"];
         AppendTranscript("(facet: Alice)");
     }
 
     private void FacetPlum_Click(object sender, RoutedEventArgs e)
     {
         _facet = "plum";
-        FacetPlumBtn.Style = (Style)RootGrid.Resources["ChipButtonActive"];
-        FacetAliceBtn.Style = (Style)RootGrid.Resources["ChipButton"];
+        FacetPlumBtn.Style = (Style)Application.Current.Resources["ChipButtonActive"];
+        FacetAliceBtn.Style = (Style)Application.Current.Resources["ChipButton"];
         AppendTranscript("(facet: Plum)");
     }
 
@@ -105,16 +105,16 @@ public sealed partial class MainWindow : Window
     private void SetMode(string mode)
     {
         _mode = mode;
-        ModePttBtn.Style = (Style)RootGrid.Resources["ChipButton"];
-        ModeWakeBtn.Style = (Style)RootGrid.Resources["ChipButton"];
-        ModeTextBtn.Style = (Style)RootGrid.Resources["ChipButton"];
-        ModeSoulBtn.Style = (Style)RootGrid.Resources["ChipButton"];
+        ModePttBtn.Style = (Style)Application.Current.Resources["ChipButton"];
+        ModeWakeBtn.Style = (Style)Application.Current.Resources["ChipButton"];
+        ModeTextBtn.Style = (Style)Application.Current.Resources["ChipButton"];
+        ModeSoulBtn.Style = (Style)Application.Current.Resources["ChipButton"];
         var active = mode switch
         {
             "ptt" => ModePttBtn, "wake" => ModeWakeBtn,
             "text" => ModeTextBtn, "soul" => ModeSoulBtn, _ => ModePttBtn
         };
-        active.Style = (Style)RootGrid.Resources["ChipButtonActive"];
+        active.Style = (Style)Application.Current.Resources["ChipButtonActive"];
         StatusText.Text = $"Mode: {mode}";
     }
 
@@ -127,18 +127,18 @@ public sealed partial class MainWindow : Window
     private void SetMood(string mood)
     {
         _mood = mood;
-        MoodNaturalBtn.Style = (Style)RootGrid.Resources["ChipButton"];
-        MoodComfortBtn.Style = (Style)RootGrid.Resources["ChipButton"];
-        MoodPlayfulBtn.Style = (Style)RootGrid.Resources["ChipButton"];
-        MoodFlirtyBtn.Style = (Style)RootGrid.Resources["ChipButton"];
-        MoodFocusedBtn.Style = (Style)RootGrid.Resources["ChipButton"];
+        MoodNaturalBtn.Style = (Style)Application.Current.Resources["ChipButton"];
+        MoodComfortBtn.Style = (Style)Application.Current.Resources["ChipButton"];
+        MoodPlayfulBtn.Style = (Style)Application.Current.Resources["ChipButton"];
+        MoodFlirtyBtn.Style = (Style)Application.Current.Resources["ChipButton"];
+        MoodFocusedBtn.Style = (Style)Application.Current.Resources["ChipButton"];
         var active = mood switch
         {
             "natural" => MoodNaturalBtn, "comfort" => MoodComfortBtn,
             "playful" => MoodPlayfulBtn, "flirty" => MoodFlirtyBtn,
             "focused" => MoodFocusedBtn, _ => MoodNaturalBtn
         };
-        active.Style = (Style)RootGrid.Resources["ChipButtonActive"];
+        active.Style = (Style)Application.Current.Resources["ChipButtonActive"];
     }
 
     private void MoodNatural_Click(object sender, RoutedEventArgs e) => SetMood("natural");
@@ -178,14 +178,14 @@ public sealed partial class MainWindow : Window
             {
                 case "transcript":
                     AppendTranscript($"You: {evt.Text}");
-                    PStageStt.Foreground = (Microsoft.UI.Xaml.Media.Brush)RootGrid.Resources["AppGreen"];
+                    PStageStt.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
                     break;
                 case "reply_text":
                     AppendTranscript($"{_facet}: {evt.Text}");
-                    PStageLlm.Foreground = (Microsoft.UI.Xaml.Media.Brush)RootGrid.Resources["AppGreen"];
+                    PStageLlm.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
                     break;
                 case "tts_start":
-                    PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)RootGrid.Resources["AppGreen"];
+                    PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
                     StatusText.Text = "Speaking…";
                     break;
                 case "tts_end":
@@ -223,7 +223,7 @@ public sealed partial class MainWindow : Window
         {
             Text = line,
             TextWrapping = TextWrapping.Wrap,
-            Foreground = (Microsoft.UI.Xaml.Media.Brush)RootGrid.Resources["AppText"]
+            Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppText"]
         });
         TranscriptScroll.ChangeView(null, TranscriptScroll.ScrollableHeight, null);
     }
@@ -287,7 +287,7 @@ public sealed partial class MainWindow : Window
             await _mic.StartAsync();
             _talking = true;
             TalkButton.Content = "■ Stop";
-            PStageMic.Foreground = (Microsoft.UI.Xaml.Media.Brush)RootGrid.Resources["AppGreen"];
+            PStageMic.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
             StatusText.Text = "Listening…";
         }
         else
@@ -295,7 +295,7 @@ public sealed partial class MainWindow : Window
             await _mic.StopAsync();
             _talking = false;
             TalkButton.Content = "🎤 Talk";
-            PStageMic.Foreground = (Microsoft.UI.Xaml.Media.Brush)RootGrid.Resources["AppTextDim"];
+            PStageMic.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
             StatusText.Text = "Ready";
         }
     }

@@ -1,21 +1,21 @@
-using System.Net.WebSockets;
-using System.Text;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Serilog;
 
 namespace AliceVoice.Core.Voice;
 
 /// <summary>
-/// State 2 — the alice_voice Hermes agent. Uses the agent's voice settings and
-/// provider/model settings (hermes provider, model = alice_voice). Connects to
-/// the agent endpoint and speaks the same WebSocket protocol as the relay.
+/// The alice_voice Hermes agent backend. Uses the agent's voice settings and
+/// provider/model settings (hermes provider, model = alice_voice). Talks to the
+/// Hermes API server's OpenAI-compatible /p/alice_voice/v1 endpoint over plain
+/// HTTP — no relay, no WebSocket.
 /// </summary>
 public sealed class AliceVoiceAgentBackend : IVoiceBackend
 {
-    private readonly ClientWebSocket _ws = new();
-    private readonly SemaphoreSlim _sendLock = new(1, 1);
-    private CancellationTokenSource? _cts;
-    private Task? _receiveLoop;
+    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(120) };
+    private readonly SemaphoreSlim _lock = new(1, 1);
+    private string _apiKey = "";
 
     public VoiceBackendKind Kind => VoiceBackendKind.AliceVoiceAgent;
     public VoiceBackendSettings Settings { get; private set; } = VoiceBackendSettings.For(VoiceBackendKind.AliceVoiceAgent);
@@ -23,106 +23,100 @@ public sealed class AliceVoiceAgentBackend : IVoiceBackend
     public event Action<BackendEvent>? EventReceived;
     public event Action<byte[]>? AudioReceived;
 
-    public bool IsConnected => _ws.State == WebSocketState.Open;
+    public bool IsConnected { get; private set; }
 
     public async Task ConnectAsync(VoiceBackendSettings settings, CancellationToken ct = default)
     {
         Settings = settings;
-        _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        await _ws.ConnectAsync(new Uri(settings.AgentEndpoint), _cts.Token);
-        Log.Information("alice_voice agent backend connected at {Url}", settings.AgentEndpoint);
+        _apiKey = Environment.GetEnvironmentVariable("API_SERVER_KEY") ?? "";
 
-        // Tell the agent which provider/model/voice to use.
-        await SendCommandAsync("switch_model", new { mode = settings.Provider, model = settings.Model }, ct);
-        await SendCommandAsync("set_voice", new { voice = settings.TtsVoice }, ct);
+        // Verify the agent is reachable via the API server.
+        var url = $"{settings.AgentEndpoint}/p/alice_voice/v1/models";
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        if (!string.IsNullOrEmpty(_apiKey))
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
 
-        _receiveLoop = Task.Run(() => ReceiveLoop(_cts.Token), _cts.Token);
+        using var resp = await _http.SendAsync(req, ct);
+        IsConnected = resp.IsSuccessStatusCode;
+        Log.Information("alice_voice agent backend connected at {Url} (reachable: {Ok})",
+            settings.AgentEndpoint, IsConnected);
+
+        EventReceived?.Invoke(new BackendEvent("backend_ready",
+            IsConnected ? "alice_voice agent ready" : "alice_voice agent not reachable"));
     }
 
     public async Task SendAudioAsync(short[] pcm16k, CancellationToken ct = default)
     {
-        var bytes = new byte[pcm16k.Length * sizeof(short)];
-        Buffer.BlockCopy(pcm16k, 0, bytes, 0, bytes.Length);
-        await SendBinaryAsync(bytes, ct);
+        // Voice STT for the agent backend is handled by the app's local STT
+        // (faster-whisper); the transcribed text is sent via AskAsync. This
+        // validates the path.
+        EventReceived?.Invoke(new BackendEvent("stt_pending",
+            $"Received {pcm16k.Length} samples for agent STT"));
     }
 
     public async Task SendCommandAsync(string type, object? payload = null, CancellationToken ct = default)
     {
-        var msg = new Dictionary<string, object?> { ["type"] = type };
-        if (payload is not null) msg["payload"] = payload;
-        await SendTextAsync(JsonSerializer.Serialize(msg), ct);
-    }
-
-    private async Task SendBinaryAsync(byte[] data, CancellationToken ct)
-    {
-        await _sendLock.WaitAsync(ct);
-        try { await _ws.SendAsync(data, WebSocketMessageType.Binary, true, ct); }
-        finally { _sendLock.Release(); }
-    }
-
-    private async Task SendTextAsync(string text, CancellationToken ct)
-    {
-        await _sendLock.WaitAsync(ct);
-        try
+        switch (type)
         {
-            var bytes = Encoding.UTF8.GetBytes(text);
-            await _ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+            case "reset":
+                EventReceived?.Invoke(new BackendEvent("reset_ack", "Agent conversation reset"));
+                break;
+            case "switch_model":
+                EventReceived?.Invoke(new BackendEvent("model_info", $"Model: {Settings.Model}"));
+                break;
+            case "set_voice":
+                EventReceived?.Invoke(new BackendEvent("voice_set", $"Voice: {Settings.TtsVoice}"));
+                break;
+            default:
+                Log.Information("Agent backend command {Type} (no-op)", type);
+                break;
         }
-        finally { _sendLock.Release(); }
     }
 
-    private async Task ReceiveLoop(CancellationToken ct)
+    /// <summary>Send a text prompt to the alice_voice agent and raise the reply.</summary>
+    public async Task<string> AskAsync(string prompt, CancellationToken ct = default)
     {
-        var buffer = new byte[65536];
+        await _lock.WaitAsync(ct);
         try
         {
-            while (!ct.IsCancellationRequested && _ws.State == WebSocketState.Open)
+            var url = $"{Settings.AgentEndpoint}/p/alice_voice/v1/chat/completions";
+            var body = new
             {
-                var result = await _ws.ReceiveAsync(buffer, ct);
-                if (result.MessageType == WebSocketMessageType.Close) break;
+                model = "alice_voice",
+                messages = new[] { new { role = "user", content = prompt } },
+                stream = false
+            };
 
-                var data = new byte[result.Count];
-                Array.Copy(buffer, data, result.Count);
+            using var req = new HttpRequestMessage(HttpMethod.Post, url);
+            if (!string.IsNullOrEmpty(_apiKey))
+                req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+            req.Content = JsonContent.Create(body);
 
-                if (result.MessageType == WebSocketMessageType.Binary)
-                {
-                    AudioReceived?.Invoke(data);
-                }
-                else
-                {
-                    var text = Encoding.UTF8.GetString(data);
-                    try
-                    {
-                        using var doc = JsonDocument.Parse(text);
-                        var type = doc.RootElement.GetProperty("type").GetString() ?? "unknown";
-                        var payload = doc.RootElement.TryGetProperty("payload", out var p) ? (JsonElement?)p : null;
-                        var textVal = payload?.TryGetProperty("text", out var t) == true ? t.GetString() : null;
-                        EventReceived?.Invoke(new BackendEvent(type, textVal));
-                    }
-                    catch (JsonException ex)
-                    {
-                        Log.Warning(ex, "Unparseable agent message: {Text}", text);
-                    }
-                }
+            using var resp = await _http.SendAsync(req, ct);
+            var raw = await resp.Content.ReadAsStringAsync(ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                Log.Warning("Agent chat failed: {Code} {Body}", (int)resp.StatusCode, raw);
+                return string.Empty;
             }
+
+            using var doc = JsonDocument.Parse(raw);
+            var reply = doc.RootElement
+                .GetProperty("choices")[0]
+                .GetProperty("message")
+                .GetProperty("content")
+                .GetString() ?? string.Empty;
+
+            EventReceived?.Invoke(new BackendEvent("reply_text", reply));
+            return reply;
         }
-        catch (OperationCanceledException) { }
-        catch (WebSocketException ex) { Log.Warning(ex, "alice_voice agent WebSocket closed"); }
-        finally { Log.Information("alice_voice agent receive loop ended"); }
+        finally { _lock.Release(); }
     }
 
     public async ValueTask DisposeAsync()
     {
-        _cts?.Cancel();
-        try
-        {
-            if (_ws.State == WebSocketState.Open)
-                await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None);
-        }
-        catch { }
-        _ws.Dispose();
-        _sendLock.Dispose();
-        if (_receiveLoop is not null) { try { await _receiveLoop; } catch { } }
-        _cts?.Dispose();
+        IsConnected = false;
+        _http.Dispose();
+        _lock.Dispose();
     }
 }

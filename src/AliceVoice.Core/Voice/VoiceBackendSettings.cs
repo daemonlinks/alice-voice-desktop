@@ -35,7 +35,7 @@ public sealed record VoiceBackendSettings
 
     // Endpoints
     public string OllamaUrl { get; init; } = "http://localhost:11434";
-    public string AgentEndpoint { get; init; } = "http://localhost:9876";
+    public string AgentEndpoint { get; init; } = "http://127.0.0.1:8642";
 
     public static VoiceBackendSettings For(VoiceBackendKind kind) => kind switch
     {
