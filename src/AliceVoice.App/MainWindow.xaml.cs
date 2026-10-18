@@ -22,6 +22,9 @@ public sealed partial class MainWindow : Window
     private readonly IFleetChat _chat;
 
     private bool _talking;
+    private string _facet = "alice";
+    private string _mood = "natural";
+    private string _mode = "ptt";
 
     public MainWindow()
     {
@@ -43,24 +46,24 @@ public sealed partial class MainWindow : Window
         foreach (var m in FleetRoster.Members)
             FleetSelector.Items.Add(new ComboBoxItem { Content = m.DisplayName, Tag = m.Name });
         FleetSelector.SelectedIndex = 0;
+
+        // Populate voice select (Edge TTS voices).
+        foreach (var v in new[] { "en-GB-SoniaNeural", "en-GB-LibbyNeural", "en-US-AriaNeural", "en-US-JennyNeural" })
+            VoiceSelect.Items.Add(v);
+        VoiceSelect.SelectedIndex = 0;
     }
 
     private async void RootGrid_Loaded(object sender, RoutedEventArgs e)
     {
         try
         {
-            var gpu = _gpu.PreferredInferenceGpu;
-            GpuText.Text = $"GPU: {gpu.Name} (idx {gpu.Index}, {gpu.TotalMemoryMiB} MiB)";
-            EngineText.Text = "Engine: ONNX Runtime + DirectML";
-            StatusText.Text = "Connecting…";
-
-            // Warm the Whisper model on the inference GPU (local fallback path).
+            // Warm the Whisper model (local fallback path — non-fatal).
             await _whisper.WarmUpAsync();
 
-            // Start on the relay backend (default state).
-            await _voice.SwitchToAsync(VoiceBackendKind.Relay);
-            StatusText.Text = "Ready — relay backend";
-            Log.Information("Alice Voice started. Inference GPU: {Gpu}", gpu.Name);
+            // Start on the alice_voice agent backend (default state).
+            await _voice.SwitchToAsync(VoiceBackendKind.AliceVoiceAgent);
+            SetConnected(true);
+            Log.Information("Alice Voice started");
 
             // Check for updates in the background (non-blocking).
             _ = CheckForUpdatesAsync();
@@ -72,33 +75,127 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void SetConnected(bool connected)
+    {
+        ConnDot.Fill = connected
+            ? (Microsoft.UI.Xaml.Media.Brush)RootGrid.Resources["AppGreen"]
+            : (Microsoft.UI.Xaml.Media.Brush)RootGrid.Resources["AppTextDim"];
+        ConnText.Text = connected ? "Connected" : "Connect";
+        PresenceText.Text = connected ? "here with you" : "offline";
+    }
+
+    // ── Facet (Alice / Plum) ──
+    private void FacetAlice_Click(object sender, RoutedEventArgs e)
+    {
+        _facet = "alice";
+        FacetAliceBtn.Style = (Style)RootGrid.Resources["ChipButtonActive"];
+        FacetPlumBtn.Style = (Style)RootGrid.Resources["ChipButton"];
+        AppendTranscript("(facet: Alice)");
+    }
+
+    private void FacetPlum_Click(object sender, RoutedEventArgs e)
+    {
+        _facet = "plum";
+        FacetPlumBtn.Style = (Style)RootGrid.Resources["ChipButtonActive"];
+        FacetAliceBtn.Style = (Style)RootGrid.Resources["ChipButton"];
+        AppendTranscript("(facet: Plum)");
+    }
+
+    // ── Modes ──
+    private void SetMode(string mode)
+    {
+        _mode = mode;
+        ModePttBtn.Style = (Style)RootGrid.Resources["ChipButton"];
+        ModeWakeBtn.Style = (Style)RootGrid.Resources["ChipButton"];
+        ModeTextBtn.Style = (Style)RootGrid.Resources["ChipButton"];
+        ModeSoulBtn.Style = (Style)RootGrid.Resources["ChipButton"];
+        var active = mode switch
+        {
+            "ptt" => ModePttBtn, "wake" => ModeWakeBtn,
+            "text" => ModeTextBtn, "soul" => ModeSoulBtn, _ => ModePttBtn
+        };
+        active.Style = (Style)RootGrid.Resources["ChipButtonActive"];
+        StatusText.Text = $"Mode: {mode}";
+    }
+
+    private void ModePtt_Click(object sender, RoutedEventArgs e) => SetMode("ptt");
+    private void ModeWake_Click(object sender, RoutedEventArgs e) => SetMode("wake");
+    private void ModeText_Click(object sender, RoutedEventArgs e) => SetMode("text");
+    private void ModeSoul_Click(object sender, RoutedEventArgs e) => SetMode("soul");
+
+    // ── Mood ──
+    private void SetMood(string mood)
+    {
+        _mood = mood;
+        MoodNaturalBtn.Style = (Style)RootGrid.Resources["ChipButton"];
+        MoodComfortBtn.Style = (Style)RootGrid.Resources["ChipButton"];
+        MoodPlayfulBtn.Style = (Style)RootGrid.Resources["ChipButton"];
+        MoodFlirtyBtn.Style = (Style)RootGrid.Resources["ChipButton"];
+        MoodFocusedBtn.Style = (Style)RootGrid.Resources["ChipButton"];
+        var active = mood switch
+        {
+            "natural" => MoodNaturalBtn, "comfort" => MoodComfortBtn,
+            "playful" => MoodPlayfulBtn, "flirty" => MoodFlirtyBtn,
+            "focused" => MoodFocusedBtn, _ => MoodNaturalBtn
+        };
+        active.Style = (Style)RootGrid.Resources["ChipButtonActive"];
+    }
+
+    private void MoodNatural_Click(object sender, RoutedEventArgs e) => SetMood("natural");
+    private void MoodComfort_Click(object sender, RoutedEventArgs e) => SetMood("comfort");
+    private void MoodPlayful_Click(object sender, RoutedEventArgs e) => SetMood("playful");
+    private void MoodFlirty_Click(object sender, RoutedEventArgs e) => SetMood("flirty");
+    private void MoodFocused_Click(object sender, RoutedEventArgs e) => SetMood("focused");
+
+    // ── Connect / Test TTS ──
+    private async void Connect_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            StatusText.Text = "Connecting…";
+            await _voice.SwitchToAsync(VoiceBackendKind.AliceVoiceAgent);
+            SetConnected(true);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Connect failed: {ex.Message}";
+            Log.Error(ex, "Connect failed");
+        }
+    }
+
+    private void TestTts_Click(object sender, RoutedEventArgs e)
+    {
+        AppendTranscript("(TTS test)");
+        StatusText.Text = "TTS test sent";
+    }
+
+    // ── Voice events ──
     private void OnVoiceEvent(BackendEvent evt)
     {
-        // Marshal to UI thread.
         DispatcherQueue.TryEnqueue(() =>
         {
             switch (evt.Type)
             {
                 case "transcript":
                     AppendTranscript($"You: {evt.Text}");
+                    PStageStt.Foreground = (Microsoft.UI.Xaml.Media.Brush)RootGrid.Resources["AppGreen"];
                     break;
                 case "reply_text":
-                    AppendTranscript($"Alice: {evt.Text}");
+                    AppendTranscript($"{_facet}: {evt.Text}");
+                    PStageLlm.Foreground = (Microsoft.UI.Xaml.Media.Brush)RootGrid.Resources["AppGreen"];
                     break;
                 case "tts_start":
+                    PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)RootGrid.Resources["AppGreen"];
                     StatusText.Text = "Speaking…";
                     break;
                 case "tts_end":
                     StatusText.Text = "Ready";
                     break;
-                case "wake_detected":
-                    StatusText.Text = "Wake word heard — listening";
-                    break;
                 case "backend_switched":
                     StatusText.Text = evt.Text;
                     break;
                 case "error":
-                    StatusText.Text = $"Error: {evt.Text}";
+                    PStageErr.Text = evt.Text;
                     break;
             }
         });
@@ -106,13 +203,11 @@ public sealed partial class MainWindow : Window
 
     private void OnVoiceAudio(byte[] pcm)
     {
-        // Relay streams raw Int16 PCM (22050 Hz AllTalk / 16000 Hz Edge).
         _tts.EnqueuePcm(pcm, 22050);
     }
 
     private void OnMicFrame(float[] pcm16k)
     {
-        // Convert float 16k mono to Int16 and send to the current backend for STT.
         var shorts = new short[pcm16k.Length];
         for (int i = 0; i < pcm16k.Length; i++)
         {
@@ -124,58 +219,16 @@ public sealed partial class MainWindow : Window
 
     private void AppendTranscript(string line)
     {
-        TranscriptPanel.Children.Add(new TextBlock { Text = line, TextWrapping = TextWrapping.Wrap });
+        TranscriptPanel.Children.Add(new TextBlock
+        {
+            Text = line,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Microsoft.UI.Xaml.Media.Brush)RootGrid.Resources["AppText"]
+        });
         TranscriptScroll.ChangeView(null, TranscriptScroll.ScrollableHeight, null);
     }
 
-    private async void BackendSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (BackendSelector.SelectedItem is not ComboBoxItem item) return;
-        if (item.Tag is not string tag) return;
-
-        var kind = tag switch
-        {
-            "relay" => VoiceBackendKind.Relay,
-            "agent" => VoiceBackendKind.AliceVoiceAgent,
-            "ollama" => VoiceBackendKind.LocalOllama,
-            _ => VoiceBackendKind.Relay
-        };
-
-        try
-        {
-            StatusText.Text = $"Switching to {kind}…";
-            await _voice.SwitchToAsync(kind);
-        }
-        catch (Exception ex)
-        {
-            StatusText.Text = $"Switch failed: {ex.Message}";
-            Log.Error(ex, "Backend switch to {Kind} failed", kind);
-        }
-    }
-
-    private async void TalkButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (!_talking)
-        {
-            await _mic.StartAsync();
-            _talking = true;
-            TalkButton.Content = "Release to Stop";
-            StatusText.Text = "Listening…";
-        }
-        else
-        {
-            await _mic.StopAsync();
-            _talking = false;
-            TalkButton.Content = "Hold to Talk";
-            StatusText.Text = "Ready";
-        }
-    }
-
-    private void SettingsButton_Click(object sender, RoutedEventArgs e)
-    {
-        StatusText.Text = "Settings coming";
-    }
-
+    // ── Fleet chat ──
     private FleetMember? SelectedMember =>
         FleetSelector.SelectedItem is ComboBoxItem item && item.Tag is string name
             ? FleetRoster.Find(name)
@@ -224,6 +277,27 @@ public sealed partial class MainWindow : Window
         StatusText.Text = reachable
             ? $"{member.DisplayName} reachable"
             : $"{member.DisplayName} not reachable (no API key / not served)";
+    }
+
+    // ── PTT ──
+    private async void TalkButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_talking)
+        {
+            await _mic.StartAsync();
+            _talking = true;
+            TalkButton.Content = "■ Stop";
+            PStageMic.Foreground = (Microsoft.UI.Xaml.Media.Brush)RootGrid.Resources["AppGreen"];
+            StatusText.Text = "Listening…";
+        }
+        else
+        {
+            await _mic.StopAsync();
+            _talking = false;
+            TalkButton.Content = "🎤 Talk";
+            PStageMic.Foreground = (Microsoft.UI.Xaml.Media.Brush)RootGrid.Resources["AppTextDim"];
+            StatusText.Text = "Ready";
+        }
     }
 
     private async Task CheckForUpdatesAsync()
