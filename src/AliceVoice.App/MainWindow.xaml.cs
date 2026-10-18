@@ -20,6 +20,7 @@ public sealed partial class MainWindow : Window
     private readonly IMicrophoneCapture _mic;
     private readonly ITtsPlayback _tts;
     private readonly IFleetChat _chat;
+    private readonly ILocalTts _localTts;
 
     private bool _talking;
     private string _facet = "alice";
@@ -37,6 +38,7 @@ public sealed partial class MainWindow : Window
         _mic = App.Services.GetRequiredService<IMicrophoneCapture>();
         _tts = App.Services.GetRequiredService<ITtsPlayback>();
         _chat = App.Services.GetRequiredService<IFleetChat>();
+        _localTts = App.Services.GetRequiredService<ILocalTts>();
 
         _voice.EventReceived += OnVoiceEvent;
         _voice.AudioReceived += OnVoiceAudio;
@@ -166,7 +168,11 @@ public sealed partial class MainWindow : Window
     private void TestTts_Click(object sender, RoutedEventArgs e)
     {
         AppendTranscript("(TTS test)");
-        StatusText.Text = "TTS test sent";
+        StatusText.Text = "Speaking…";
+        PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
+        _localTts.Speak("Hello, this is Alice. I can hear you.");
+        PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
+        StatusText.Text = "Ready";
     }
 
     // ── Voice events ──
@@ -258,6 +264,14 @@ public sealed partial class MainWindow : Window
             var reply = await _chat.SendAsync(member, text);
             AppendTranscript($"{member.DisplayName}: {reply}");
             StatusText.Text = $"Replied from {member.DisplayName}";
+
+            // Speak the reply through instant local TTS.
+            if (!string.IsNullOrWhiteSpace(reply))
+            {
+                PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
+                _localTts.Speak(reply);
+                PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
+            }
         }
         catch (Exception ex)
         {
