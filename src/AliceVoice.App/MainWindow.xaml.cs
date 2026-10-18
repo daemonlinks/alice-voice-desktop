@@ -305,15 +305,17 @@ public sealed partial class MainWindow : Window
 
     // ── Test TTS ──
     private async void TestTts_Click(object sender, RoutedEventArgs e)
-    {
-        var voice = VoiceSelect.SelectedItem is ComboBoxItem vci && vci.Tag is string v ? v : "";
-        AppendSystem($"voice test — {voice.Replace(".wav", "").Replace("_", " ")}");
-        StatusText.Text = "Speaking…";
-        PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-        await _voiceProvider.SpeakAsync(CurrentMemberProfile, "Hello Master. This is a voice quality test.");
-        PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
-        StatusText.Text = "Ready";
-    }
+        {
+            var voice = VoiceSelect.SelectedItem is ComboBoxItem vci && vci.Tag is string v ? v : "";
+            var provider = SelectedProvider ?? VoiceProviderKind.AllTalk;
+            var profile = new VoiceProfile(provider, voice);
+            AppendSystem($"voice test — {provider} · {voice.Replace(".wav", "").Replace("_", " ")}");
+            StatusText.Text = "Speaking…";
+            PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
+            await _voiceProvider.SpeakAsync(profile, "Hello Master. This is a voice quality test.");
+            PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
+            StatusText.Text = "Ready";
+        }
 
     // ── Modes ──
     private void ModePtt_Click(object sender, RoutedEventArgs e) => SetMode("ptt");
