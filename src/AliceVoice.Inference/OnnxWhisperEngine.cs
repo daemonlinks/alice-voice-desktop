@@ -45,19 +45,19 @@ public sealed class OnnxWhisperEngine : IWhisperEngine, IDisposable
                     };
 
                     // DirectML = GPU inference. Device id pins to the chosen GPU.
-                    // Not available in every ONNX Runtime build — if it fails, the
-                    // engine degrades to CPU (or stays unready) without crashing startup.
-                    try
-                    {
-                        options.AppendExecutionProvider("Dml", new Dictionary<string, string>
-                        {
-                            ["device_id"] = gpu.Index.ToString()
-                        });
-                    }
-                    catch (NotSupportedException ex)
-                    {
-                        Log.Warning(ex, "DirectML provider unavailable; Whisper will not use GPU");
-                    }
+                                        // Use the strongly-typed AppendExecutionProviderDML — the
+                                        // string-based AppendExecutionProvider("Dml", ...) does NOT
+                                        // support DirectML (only QNN/SNPE/XNNPACK/AZURE) and throws
+                                        // NotSupportedException. If it still fails, the engine
+                                        // degrades to CPU (or stays unready) without crashing startup.
+                                        try
+                                        {
+                                            options.AppendExecutionProvider_DML(gpu.Index);
+                                        }
+                                        catch (NotSupportedException ex)
+                                        {
+                                            Log.Warning(ex, "DirectML provider unavailable; Whisper will not use GPU");
+                                        }
 
                     // Whisper encoder/decoder ONNX models. Paths are resolved from
                     // the app data dir; the model downloader populates them.
