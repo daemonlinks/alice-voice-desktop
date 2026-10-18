@@ -78,6 +78,10 @@ public sealed partial class MainWindow : Window
                 foreach (var m in FleetRoster.Members)
                                     FleetSelector.Items.Add(new ComboBoxItem { Content = m.DisplayName, Tag = m.Name });
                                 FleetSelector.SelectedIndex = 0;
+
+        // Populate the voice provider selector from the registered providers.
+                foreach (var p in _voiceProvider.Providers)
+                                    VoiceProviderSelect.Items.Add(new ComboBoxItem { Content = p.DisplayName, Tag = p.Kind });
                             }
 
     private async void RootGrid_Loaded(object sender, RoutedEventArgs e)
@@ -92,7 +96,7 @@ public sealed partial class MainWindow : Window
             SetConnected(true);
             Log.Information("Alice Voice started");
             _ = CheckForUpdatesAsync();
-            _ = LoadVoicesAsync();
+            _ = LoadVoicesForSelectedProviderAsync();
             AppendSystem("Talk to me, Master.");
         }
         catch (Exception ex)
@@ -235,24 +239,29 @@ public sealed partial class MainWindow : Window
     private string? SelectedMemberName =>
         FleetSelector.SelectedItem is ComboBoxItem item && item.Tag is string name ? name : null;
 
+    private VoiceProviderKind? SelectedProvider =>
+        VoiceProviderSelect.SelectedItem is ComboBoxItem item && item.Tag is VoiceProviderKind kind ? kind : null;
+
     private VoiceProfile CurrentMemberProfile
     {
         get
         {
             var name = SelectedMemberName;
             if (name is not null && _memberVoices.TryGetValue(name, out var p)) return p;
-            return new VoiceProfile(VoiceProviderKind.AllTalk, "");
+            return new VoiceProfile(SelectedProvider ?? VoiceProviderKind.AllTalk, "");
         }
     }
 
-    // ── Voice select + TTS backend ──
-    private async Task LoadVoicesAsync()
+    // ── Voice provider + voice select ──
+    private async Task LoadVoicesForSelectedProviderAsync()
     {
         try
         {
-            var alltalk = _voiceProvider.Providers.FirstOrDefault(p => p.Kind == VoiceProviderKind.AllTalk);
-            if (alltalk is null) return;
-            var voices = await alltalk.ListVoicesAsync();
+            var kind = SelectedProvider;
+            if (kind is null) return;
+            var provider = _voiceProvider.Providers.FirstOrDefault(p => p.Kind == kind);
+            if (provider is null) return;
+            var voices = await provider.ListVoicesAsync();
             VoiceSelect.Items.Clear();
             foreach (var v in voices.OrderBy(x => x))
                 VoiceSelect.Items.Add(new ComboBoxItem { Content = v.Replace(".wav", ""), Tag = v });
@@ -262,9 +271,24 @@ public sealed partial class MainWindow : Window
                 foreach (var item in VoiceSelect.Items)
                     if (item is ComboBoxItem ci && ci.Tag?.ToString() == preferred) { VoiceSelect.SelectedItem = ci; break; }
             }
-            AddLog($"Voices loaded: {voices.Count}");
+            AddLog($"Voices loaded: {voices.Count} ({provider.DisplayName})");
         }
         catch (Exception ex) { AddLog($"Voices: using defaults ({ex.Message})"); }
+    }
+
+    private async void VoiceProviderSelect_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (VoiceProviderSelect.SelectedItem is not ComboBoxItem ci || ci.Tag is not VoiceProviderKind kind) return;
+        _ttsEngine = kind == VoiceProviderKind.AllTalk ? "alltalk" : "sapi";
+        var name = SelectedMemberName;
+        if (name is not null)
+        {
+            var profile = CurrentMemberProfile;
+            _memberVoices[name] = new VoiceProfile(kind, profile.Voice);
+            SaveMemberVoices();
+        }
+        AddLog($"Voice provider: {kind}");
+        await LoadVoicesForSelectedProviderAsync();
     }
 
     private void VoiceSelect_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -279,26 +303,6 @@ public sealed partial class MainWindow : Window
         }
         AddLog($"Voice: {voice.Replace(".wav", "").Replace("_", " ")}");
     }
-
-    private void TtsBackendSelect_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (TtsBackendSelect.SelectedItem is not ComboBoxItem ci || ci.Tag is not string backend) return;
-        _ttsEngine = backend;
-        var name = SelectedMemberName;
-        if (name is not null)
-        {
-            var profile = CurrentMemberProfile;
-            _memberVoices[name] = new VoiceProfile(BackendToProvider(backend), profile.Voice);
-            SaveMemberVoices();
-        }
-        AddLog($"TTS backend: {backend}");
-    }
-
-    private static VoiceProviderKind BackendToProvider(string backend) => backend switch
-    {
-        "alltalk" => VoiceProviderKind.AllTalk,
-        _ => VoiceProviderKind.Sapi
-    };
 
     // ── Test TTS ──
     private async void TestTts_Click(object sender, RoutedEventArgs e)
@@ -679,15 +683,26 @@ public sealed partial class MainWindow : Window
     }
 
     private async void FleetSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        var member = SelectedMember;
-        if (member is null) return;
-        StatusText.Text = $"Checking {member.DisplayName}…";
-        var reachable = await _chat.IsReachableAsync(member);
-        StatusText.Text = reachable
-            ? $"{member.DisplayName} reachable"
-            : $"{member.DisplayName} not reachable (no API key / not served)";
-    }
+        {
+            var member = SelectedMember;
+            if (member is null) return;
+            // Load the member's saved voice assignment into the dropdowns.
+            if (SelectedMemberName is string name && _memberVoices.TryGetValue(name, out var saved))
+            {
+                foreach (var item in VoiceProviderSelect.Items)
+                    if (item is ComboBoxItem pi && pi.Tag is VoiceProviderKind pk && pk == saved.Provider)
+                    { VoiceProviderSelect.SelectedItem = pi; break; }
+                await LoadVoicesForSelectedProviderAsync();
+                foreach (var item in VoiceSelect.Items)
+                    if (item is ComboBoxItem vi && vi.Tag?.ToString() == saved.Voice)
+                    { VoiceSelect.SelectedItem = vi; break; }
+            }
+            StatusText.Text = $"Checking {member.DisplayName}…";
+            var reachable = await _chat.IsReachableAsync(member);
+            StatusText.Text = reachable
+                ? $"{member.DisplayName} reachable"
+                : $"{member.DisplayName} not reachable (no API key / not served)";
+        }
 
     // ── PTT ──
     private async void TalkButton_Click(object sender, RoutedEventArgs e)
