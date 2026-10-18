@@ -30,13 +30,13 @@ public sealed class VoiceBackendManager : IVoiceBackendManager
     private readonly Dictionary<VoiceBackendKind, IVoiceBackend> _backends;
     private IVoiceBackend _current;
 
-    public VoiceBackendManager()
+    public VoiceBackendManager(ILocalTts tts)
     {
         _backends = new Dictionary<VoiceBackendKind, IVoiceBackend>
         {
             [VoiceBackendKind.Relay] = new RelayBackend(),
             [VoiceBackendKind.AliceVoiceAgent] = new AliceVoiceAgentBackend(),
-            [VoiceBackendKind.LocalOllama] = new LocalOllamaBackend()
+            [VoiceBackendKind.LocalOllama] = new LocalOllamaBackend(tts)
         };
         _current = _backends[VoiceBackendKind.Relay];
 

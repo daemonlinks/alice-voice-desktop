@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -6,15 +7,24 @@ using Serilog;
 namespace AliceVoice.Core.Voice;
 
 /// <summary>
-/// State 3 — local Ollama backend. Uses the Ollama HTTP API for the LLM with a
-/// defined model, and configurable STT/TTS engines. Fully local, no relay.
+/// State 3 — local Ollama backend. Fully local, no relay: faster-whisper (GPU)
+/// for STT, Ollama for the LLM, SAPI for instant TTS. Magnitude faster than the
+/// relay round-trip in both directions.
 /// </summary>
 public sealed class LocalOllamaBackend : IVoiceBackend
 {
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(120) };
     private readonly SemaphoreSlim _lock = new(1, 1);
+    private readonly ILocalTts _tts;
+    private readonly string _sttScript;
     private CancellationTokenSource? _cts;
-    private Task? _loop;
+
+    public LocalOllamaBackend(ILocalTts tts, string? sttScript = null)
+    {
+        _tts = tts;
+        _sttScript = sttScript ?? Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "scripts", "faster_whisper_stt.py");
+    }
 
     public VoiceBackendKind Kind => VoiceBackendKind.LocalOllama;
     public VoiceBackendSettings Settings { get; private set; } = VoiceBackendSettings.For(VoiceBackendKind.LocalOllama);
@@ -37,17 +47,56 @@ public sealed class LocalOllamaBackend : IVoiceBackend
             settings.OllamaUrl, settings.Model);
 
         EventReceived?.Invoke(new BackendEvent("backend_ready",
-            $"Ollama backend ready — model {settings.Model}, STT {settings.SttEngine}, TTS {settings.TtsEngine}"));
+            $"Ollama backend ready — model {Settings.Model}, STT {Settings.SttEngine}, TTS {Settings.TtsEngine}"));
     }
 
     public async Task SendAudioAsync(short[] pcm16k, CancellationToken ct = default)
     {
-        // STT: in this state, audio is transcribed locally (Whisper) and the
-        // text is sent to Ollama. The transcription is handled by the app's
-        // Whisper engine; here we raise a transcript event for the caller.
-        // Full local STT wiring is the next increment — this validates the path.
-        EventReceived?.Invoke(new BackendEvent("stt_pending",
-            $"Received {pcm16k.Length} samples for local STT ({Settings.SttEngine})"));
+        // STT: transcribe locally on the GPU via faster-whisper, then ask Ollama.
+        var text = await TranscribeAsync(pcm16k, ct);
+        if (string.IsNullOrWhiteSpace(text)) return;
+
+        EventReceived?.Invoke(new BackendEvent("transcript", text));
+        Log.Information("STT: {Text}", text);
+
+        var reply = await AskAsync(text, ct);
+        if (!string.IsNullOrWhiteSpace(reply))
+        {
+            // TTS: speak the reply instantly via SAPI.
+            _tts.Speak(reply);
+        }
+    }
+
+    private async Task<string> TranscribeAsync(short[] pcm16k, CancellationToken ct)
+    {
+        var pcmBytes = new byte[pcm16k.Length * sizeof(short)];
+        Buffer.BlockCopy(pcm16k, 0, pcmBytes, 0, pcmBytes.Length);
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = "python",
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add(_sttScript);
+        psi.ArgumentList.Add("--model");
+        psi.ArgumentList.Add(Settings.SttModel);
+        psi.ArgumentList.Add("--device");
+        psi.ArgumentList.Add("cuda");
+        psi.ArgumentList.Add("--lang");
+        psi.ArgumentList.Add("en");
+
+        using var proc = Process.Start(psi);
+        if (proc is null) return string.Empty;
+
+        await proc.StandardInput.BaseStream.WriteAsync(pcmBytes, ct);
+        proc.StandardInput.Close();
+
+        var text = (await proc.StandardOutput.ReadToEndAsync(ct)).Trim();
+        await proc.WaitForExitAsync(ct);
+        return text;
     }
 
     public async Task SendCommandAsync(string type, object? payload = null, CancellationToken ct = default)
