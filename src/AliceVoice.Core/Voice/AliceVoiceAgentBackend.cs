@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -10,13 +11,21 @@ namespace AliceVoice.Core.Voice;
 /// The alice_voice Hermes agent backend. Uses the agent's voice settings and
 /// provider/model settings (hermes provider, model = alice_voice). Talks to the
 /// Hermes API server's OpenAI-compatible /p/alice_voice/v1 endpoint over plain
-/// HTTP — no relay, no WebSocket.
+/// HTTP — no relay, no WebSocket. STT is done locally on the GPU via the
+/// faster-whisper bridge, then the transcript is sent to the agent via AskAsync.
 /// </summary>
 public sealed class AliceVoiceAgentBackend : IVoiceBackend
 {
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(120) };
     private readonly SemaphoreSlim _lock = new(1, 1);
+    private readonly string _sttScript;
     private string _apiKey = "";
+
+    public AliceVoiceAgentBackend(string? sttScript = null)
+    {
+        _sttScript = sttScript ?? Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "scripts", "faster_whisper_stt.py");
+    }
 
     public VoiceBackendKind Kind => VoiceBackendKind.AliceVoiceAgent;
     public VoiceBackendSettings Settings { get; private set; } = VoiceBackendSettings.For(VoiceBackendKind.AliceVoiceAgent);
@@ -48,11 +57,48 @@ public sealed class AliceVoiceAgentBackend : IVoiceBackend
 
     public async Task SendAudioAsync(short[] pcm16k, CancellationToken ct = default)
     {
-        // Voice STT for the agent backend is handled by the app's local STT
-        // (faster-whisper); the transcribed text is sent via AskAsync. This
-        // validates the path.
-        EventReceived?.Invoke(new BackendEvent("stt_pending",
-            $"Received {pcm16k.Length} samples for agent STT"));
+        // STT: transcribe locally on the GPU via faster-whisper, then ask the agent.
+        var text = await TranscribeAsync(pcm16k, ct);
+        if (string.IsNullOrWhiteSpace(text)) return;
+
+        EventReceived?.Invoke(new BackendEvent("transcript", text));
+        Log.Information("STT: {Text}", text);
+
+        var reply = await AskAsync(text, ct);
+        if (!string.IsNullOrWhiteSpace(reply))
+            EventReceived?.Invoke(new BackendEvent("reply_text", reply));
+    }
+
+    private async Task<string> TranscribeAsync(short[] pcm16k, CancellationToken ct)
+    {
+        var pcmBytes = new byte[pcm16k.Length * sizeof(short)];
+        Buffer.BlockCopy(pcm16k, 0, pcmBytes, 0, pcmBytes.Length);
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = "python",
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add(_sttScript);
+        psi.ArgumentList.Add("--model");
+        psi.ArgumentList.Add(Settings.SttModel);
+        psi.ArgumentList.Add("--device");
+        psi.ArgumentList.Add("cuda");
+        psi.ArgumentList.Add("--lang");
+        psi.ArgumentList.Add("en");
+
+        using var proc = Process.Start(psi);
+        if (proc is null) return string.Empty;
+
+        await proc.StandardInput.BaseStream.WriteAsync(pcmBytes, ct);
+        proc.StandardInput.Close();
+
+        var text = (await proc.StandardOutput.ReadToEndAsync(ct)).Trim();
+        await proc.WaitForExitAsync(ct);
+        return text;
     }
 
     public async Task SendCommandAsync(string type, object? payload = null, CancellationToken ct = default)
