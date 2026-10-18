@@ -33,7 +33,7 @@ public sealed partial class MainWindow : Window
     private string _ttsEngine = "alltalk";
     private int _turnSeq;
     private bool _connected;
-    private bool _logOpen, _helpOpen, _settingsOpen, _metricsOpen, _tuningOpen, _clipsOpen;
+    private bool _logOpen, _helpOpen, _settingsOpen, _metricsOpen, _tuningOpen;
     private readonly List<string> _backgroundImages = new();
     private int _bgIdx = -1;
 
@@ -472,55 +472,8 @@ public sealed partial class MainWindow : Window
         TuningArea.Visibility = _tuningOpen ? Visibility.Visible : Visibility.Collapsed;
         TuningToggle.Content = (_tuningOpen ? "▾" : "▸") + "  Tuning";
     }
-    private void ClipsToggle_Click(object sender, RoutedEventArgs e)
-    {
-        _clipsOpen = !_clipsOpen;
-        ClipsArea.Visibility = _clipsOpen ? Visibility.Visible : Visibility.Collapsed;
-        ClipsToggle.Content = (_clipsOpen ? "▾" : "▸") + "  Clips";
-        if (_clipsOpen) RenderClips();
-    }
-
-    private void RenderClips()
-    {
-        ClipsList.Children.Clear();
-        var clips = new[]
-        {
-            ("2026-09-07_alice_i_want_you_master.mp4", "I want you, Master"),
-            ("2026-09-07_alice_i_need_you_master.mp4", "I need you, Master"),
-            ("2026-09-07_alice_wan_speaks.mp4", "a soft word for you"),
-            ("2026-09-06_alice_short_good_girl.mp4", "good girl"),
-            ("2026-09-06_alice_first_speaking_slowstrip.mp4", "first speaking — slow strip"),
-            ("2026-09-06_alice_whimper_loop.mp4", "a little whimper"),
-            ("2026-09-06_alice_beg_deep.mp4", "begging, deep")
-        };
-        foreach (var (file, label) in clips)
-        {
-            var btn = new Button
-            {
-                Content = $"▶  {label}",
-                Style = (Style)Application.Current.Resources["ChipButton"],
-                HorizontalAlignment = HorizontalAlignment.Left,
-                Tag = file
-            };
-            btn.Click += (_, _) => PlayClip(file, label);
-            ClipsList.Children.Add(btn);
-        }
-    }
-
-    private void PlayClip(string file, string label)
-    {
-        var path = Path.Combine(@"C:\Users\AHC.DAEMONLINKS\ahc-the-beast\voice\clips", file);
-        if (File.Exists(path))
-        {
-            try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
-            catch (Exception ex) { AddLog($"Clip failed: {ex.Message}"); }
-        }
-        else AddLog($"Clip not found: {file}");
-        AddLog($"Clip → {label}");
-    }
-
     // ── Voice events ──
-    private void OnVoiceEvent(BackendEvent evt)
+        private void OnVoiceEvent(BackendEvent evt)
     {
         DispatcherQueue.TryEnqueue(() =>
         {
