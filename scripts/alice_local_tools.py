@@ -21,6 +21,29 @@ HONCHO_PEER = os.environ.get("HONCHO_PEER", "AHC")
 HONCHO_AI_PEER = os.environ.get("HONCHO_AI_PEER", "alice_local")
 
 
+def _load_env() -> None:
+    """Load TAVILY_API_KEY (and any other keys) from the AliceVoice .env file."""
+    global HONCHO_API_KEY
+    env_path = os.environ.get("ALICEVOICE_ENV", r"C:\ProgramData\AliceVoice\.env")
+    if not os.path.exists(env_path):
+        return
+    for line in open(env_path, encoding="utf-8", errors="replace").read().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        v = v.strip().strip('"').strip("'")
+        if not v:
+            continue
+        if k == "TAVILY_API_KEY" and not os.environ.get("TAVILY_API_KEY"):
+            os.environ["TAVILY_API_KEY"] = v
+        elif k == "HONCHO_API_KEY" and not os.environ.get("HONCHO_API_KEY"):
+            HONCHO_API_KEY = v
+
+
+_load_env()
+
+
 def _raw_query(query: str, limit: int, distance: float) -> list:
     url = f"{HONCHO_BASE}/v3/workspaces/{HONCHO_WORKSPACE}/conclusions/query"
     body = json.dumps({
