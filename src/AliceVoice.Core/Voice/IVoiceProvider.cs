@@ -11,7 +11,10 @@ public enum VoiceProviderKind
     AllTalk,
 
     /// <summary>Windows SAPI (System.Speech). Instant, local, no network.</summary>
-    Sapi
+    Sapi,
+
+    /// <summary>Piper TTS (fully local, fleet-standard) via CLI. Runs piper.exe.</summary>
+    Piper
 }
 
 /// <summary>

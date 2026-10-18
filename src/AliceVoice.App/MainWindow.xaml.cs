@@ -279,7 +279,12 @@ public sealed partial class MainWindow : Window
     private async void VoiceProviderSelect_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (VoiceProviderSelect.SelectedItem is not ComboBoxItem ci || ci.Tag is not VoiceProviderKind kind) return;
-        _ttsEngine = kind == VoiceProviderKind.AllTalk ? "alltalk" : "sapi";
+        _ttsEngine = kind switch
+        {
+            VoiceProviderKind.AllTalk => "alltalk",
+            VoiceProviderKind.Piper => "piper",
+            _ => "sapi"
+        };
         var name = SelectedMemberName;
         if (name is not null)
         {

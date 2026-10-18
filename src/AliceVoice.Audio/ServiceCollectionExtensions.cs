@@ -12,9 +12,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SapiLocalTts>();
         services.AddSingleton<ILocalTts>(sp => sp.GetRequiredService<SapiLocalTts>());
 
-        // Voice providers (AllTalk direct HTTP + SAPI).
+        // Voice providers (AllTalk direct HTTP + SAPI + Piper local CLI).
         services.AddSingleton<IVoiceProvider, AllTalkTtsProvider>();
         services.AddSingleton<IVoiceProvider, SapiTtsProvider>();
+        services.AddSingleton<IVoiceProvider, PiperTtsProvider>();
         return services;
     }
 }
