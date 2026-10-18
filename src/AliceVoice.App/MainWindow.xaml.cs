@@ -181,21 +181,15 @@ public sealed partial class MainWindow : Window
     }
 
     private void Reset_Click(object sender, RoutedEventArgs e)
-    {
-        TranscriptPanel.Children.Clear();
-        _turnSeq = 0;
-        StatusText.Text = "Ready";
-        AppendSystem("Conversation reset");
-    }
+        {
+            TranscriptPanel.Children.Clear();
+            _turnSeq = 0;
+            StatusText.Text = "Ready";
+            AppendSystem("Conversation reset");
+        }
 
-    private void Logout_Click(object sender, RoutedEventArgs e)
-    {
-        SetConnected(false);
-        StatusText.Text = "Logged out";
-    }
-
-    // ── Per-member voice assignment ──
-    private void LoadMemberVoices()
+        // ── Per Per-member voice assignment ──
+        private void LoadMemberVoices()
     {
         try
         {

@@ -69,8 +69,7 @@
                             <TextBlock x:Name="ConnText" Text="Connect"/>
                         </StackPanel>
                     </Button>
-                    <Button x:Name="LogoutBtn" Content="Logout" Style="{StaticResource ChipButton}" Click="Logout_Click"/>
-                </StackPanel>
+                                    </StackPanel>
             </Grid>
         </Border>
 
