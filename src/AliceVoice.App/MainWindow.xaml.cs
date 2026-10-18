@@ -10,6 +10,7 @@ using AliceVoice.Core.Updates;
 using AliceVoice.Core.Voice;
 using AliceVoice.Inference;
 using System.Diagnostics;
+using System.Text.Json;
 
 namespace AliceVoice.App;
 
@@ -25,7 +26,6 @@ public sealed partial class MainWindow : Window
     private readonly IVoiceProviderManager _voiceProvider;
 
     private bool _talking;
-    private string _facet = "alice";
     private string _mood = "natural";
     private string _mode = "ptt";
     private string _lastNonSoulMode = "ptt";
@@ -34,9 +34,13 @@ public sealed partial class MainWindow : Window
     private int _turnSeq;
     private bool _connected;
     private bool _logOpen, _helpOpen, _settingsOpen, _metricsOpen, _tuningOpen, _clipsOpen;
-    private readonly Dictionary<string, string> _facetVoices = new() { ["alice"] = "", ["plum"] = "" };
     private readonly List<string> _backgroundImages = new();
     private int _bgIdx = -1;
+
+    // Per-fleet-member voice assignment: member name -> { provider, voice }.
+    private readonly Dictionary<string, VoiceProfile> _memberVoices = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly string VoiceAssignmentsPath =
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AliceVoice", "voice-assignments.json");
 
     public MainWindow()
         {
@@ -82,6 +86,7 @@ public sealed partial class MainWindow : Window
             {
                 try { AppWindow.Resize(new Windows.Graphics.SizeInt32(1200, 800)); } catch { }
                 LoadBackgrounds();
+                LoadMemberVoices();
                 await _whisper.WarmUpAsync();
             await _voice.SwitchToAsync(VoiceBackendKind.AliceVoiceAgent);
             SetConnected(true);
@@ -185,21 +190,59 @@ public sealed partial class MainWindow : Window
         StatusText.Text = "Logged out";
     }
 
-    // ── Facet (Alice / Plum) ──
-    private void FacetAlice_Click(object sender, RoutedEventArgs e) => SetFacet("alice");
-    private void FacetPlum_Click(object sender, RoutedEventArgs e) => SetFacet("plum");
-
-    private void SetFacet(string facet)
+    // ── Per-member voice assignment ──
+    private void LoadMemberVoices()
     {
-        _facet = facet;
-        FacetAliceBtn.Style = (Style)Application.Current.Resources[facet == "alice" ? "ChipButtonActive" : "ChipButton"];
-        FacetPlumBtn.Style = (Style)Application.Current.Resources[facet == "plum" ? "ChipButtonActive" : "ChipButton"];
-        if (_facetVoices[facet] is { Length: > 0 } saved)
+        try
         {
-            foreach (var item in VoiceSelect.Items)
-                if (item is ComboBoxItem ci && ci.Content?.ToString() == saved) { VoiceSelect.SelectedItem = ci; break; }
+            if (!File.Exists(VoiceAssignmentsPath)) return;
+            var json = File.ReadAllText(VoiceAssignmentsPath);
+            var map = JsonSerializer.Deserialize<Dictionary<string, VoiceProfileDto>>(json);
+            if (map is null) return;
+            _memberVoices.Clear();
+            foreach (var (name, dto) in map)
+                _memberVoices[name] = new VoiceProfile(dto.Provider, dto.Voice);
+            AddLog($"Voice assignments loaded: {_memberVoices.Count}");
         }
-        AppendSystem($"(facet: {facet})");
+        catch (Exception ex) { Log.Warning(ex, "Failed to load voice assignments"); }
+    }
+
+    private void SaveMemberVoices()
+    {
+        try
+        {
+            var map = _memberVoices.ToDictionary(
+                kv => kv.Key,
+                kv => new VoiceProfileDto { Provider = kv.Value.Provider, Voice = kv.Value.Voice });
+            var dir = Path.GetDirectoryName(VoiceAssignmentsPath);
+            if (dir is not null) Directory.CreateDirectory(dir);
+            File.WriteAllText(VoiceAssignmentsPath, JsonSerializer.Serialize(map, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (Exception ex) { Log.Warning(ex, "Failed to save voice assignments"); }
+    }
+
+    private sealed class VoiceProfileDto
+    {
+        public VoiceProviderKind Provider { get; set; }
+        public string Voice { get; set; } = "";
+    }
+
+    private FleetMember? SelectedMember =>
+        FleetSelector.SelectedItem is ComboBoxItem item && item.Tag is string name
+            ? FleetRoster.Find(name)
+            : null;
+
+    private string? SelectedMemberName =>
+        FleetSelector.SelectedItem is ComboBoxItem item && item.Tag is string name ? name : null;
+
+    private VoiceProfile CurrentMemberProfile
+    {
+        get
+        {
+            var name = SelectedMemberName;
+            if (name is not null && _memberVoices.TryGetValue(name, out var p)) return p;
+            return new VoiceProfile(VoiceProviderKind.AllTalk, "");
+        }
     }
 
     // ── Voice select + TTS backend ──
@@ -219,7 +262,7 @@ public sealed partial class MainWindow : Window
                 foreach (var item in VoiceSelect.Items)
                     if (item is ComboBoxItem ci && ci.Tag?.ToString() == preferred) { VoiceSelect.SelectedItem = ci; break; }
             }
-            AddLog($"Voices loaded: {voices.Count} · {_facet}");
+            AddLog($"Voices loaded: {voices.Count}");
         }
         catch (Exception ex) { AddLog($"Voices: using defaults ({ex.Message})"); }
     }
@@ -227,7 +270,13 @@ public sealed partial class MainWindow : Window
     private void VoiceSelect_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (VoiceSelect.SelectedItem is not ComboBoxItem ci || ci.Tag is not string voice) return;
-        _facetVoices[_facet] = voice;
+        var name = SelectedMemberName;
+        if (name is not null)
+        {
+            var profile = CurrentMemberProfile;
+            _memberVoices[name] = new VoiceProfile(profile.Provider, voice);
+            SaveMemberVoices();
+        }
         AddLog($"Voice: {voice.Replace(".wav", "").Replace("_", " ")}");
     }
 
@@ -235,8 +284,21 @@ public sealed partial class MainWindow : Window
     {
         if (TtsBackendSelect.SelectedItem is not ComboBoxItem ci || ci.Tag is not string backend) return;
         _ttsEngine = backend;
+        var name = SelectedMemberName;
+        if (name is not null)
+        {
+            var profile = CurrentMemberProfile;
+            _memberVoices[name] = new VoiceProfile(BackendToProvider(backend), profile.Voice);
+            SaveMemberVoices();
+        }
         AddLog($"TTS backend: {backend}");
     }
+
+    private static VoiceProviderKind BackendToProvider(string backend) => backend switch
+    {
+        "alltalk" => VoiceProviderKind.AllTalk,
+        _ => VoiceProviderKind.Sapi
+    };
 
     // ── Test TTS ──
     private async void TestTts_Click(object sender, RoutedEventArgs e)
@@ -245,7 +307,7 @@ public sealed partial class MainWindow : Window
         AppendSystem($"voice test — {voice.Replace(".wav", "").Replace("_", " ")}");
         StatusText.Text = "Speaking…";
         PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-        await _voiceProvider.SpeakForPersonaAsync(_facet, "Hello Master. I am Alice. This is a voice quality test.");
+        await _voiceProvider.SpeakAsync(CurrentMemberProfile, "Hello Master. This is a voice quality test.");
         PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
         StatusText.Text = "Ready";
     }
@@ -534,7 +596,8 @@ public sealed partial class MainWindow : Window
             Margin = new Thickness(0, 0, 0, 8)
         };
         var stack = new StackPanel();
-        stack.Children.Add(new TextBlock { Text = $"{_facet}  #{n} · {DateTime.Now:HH:mm:ss}", FontSize = 10, Opacity = 0.5, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppText"] });
+        var who = SelectedMember?.DisplayName ?? "Alice";
+        stack.Children.Add(new TextBlock { Text = $"{who}  #{n} · {DateTime.Now:HH:mm:ss}", FontSize = 10, Opacity = 0.5, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppText"] });
         stack.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppText"] });
         var remember = new Button
         {
@@ -576,11 +639,6 @@ public sealed partial class MainWindow : Window
     }
 
     // ── Fleet chat ──
-    private FleetMember? SelectedMember =>
-        FleetSelector.SelectedItem is ComboBoxItem item && item.Tag is string name
-            ? FleetRoster.Find(name)
-            : null;
-
     private async void SendButton_Click(object sender, RoutedEventArgs e)
         => await SendChatAsync();
 
@@ -608,7 +666,7 @@ public sealed partial class MainWindow : Window
             if (!string.IsNullOrWhiteSpace(reply))
             {
                 PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-                await _voiceProvider.SpeakForPersonaAsync(_facet, reply);
+                await _voiceProvider.SpeakAsync(CurrentMemberProfile, reply);
                 PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
             }
         }

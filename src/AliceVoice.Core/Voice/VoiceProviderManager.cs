@@ -31,11 +31,10 @@ public sealed class VoiceProviderManager : IVoiceProviderManager
             _providers[p.Kind] = p;
         Assignment = new VoiceAssignment
         {
-            // Sensible defaults: Alice/Plum on AllTalk (high quality), backends on SAPI (instant).
+            // Default: SAPI (instant, local). Per-fleet-member assignments are
+            // loaded from voice-assignments.json at runtime by the app.
             Default = new VoiceProfile(VoiceProviderKind.Sapi, "")
         };
-        Assignment.AssignPersona("alice", new VoiceProfile(VoiceProviderKind.AllTalk, "female_07.wav"));
-        Assignment.AssignPersona("plum", new VoiceProfile(VoiceProviderKind.AllTalk, "female_06.wav"));
         Assignment.AssignBackend(VoiceBackendKind.AliceVoiceAgent, new VoiceProfile(VoiceProviderKind.Sapi, ""));
         Assignment.AssignBackend(VoiceBackendKind.LocalOllama, new VoiceProfile(VoiceProviderKind.Sapi, ""));
     }
