@@ -681,7 +681,24 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void FleetSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void BackendSelect_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (BackendSelect.SelectedItem is not ComboBoxItem ci || ci.Tag is not string tag) return;
+            var kind = tag == "alice_local" ? VoiceBackendKind.AliceLocal : VoiceBackendKind.AliceVoiceAgent;
+            StatusText.Text = $"Switching to {ci.Content}…";
+            try
+            {
+                await _voice.SwitchToAsync(kind);
+                StatusText.Text = $"Backend: {ci.Content}";
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"Backend switch failed: {ex.Message}";
+                Log.Error(ex, "Backend switch to {Kind} failed", kind);
+            }
+        }
+
+        private async void FleetSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             var member = SelectedMember;
             if (member is null) return;

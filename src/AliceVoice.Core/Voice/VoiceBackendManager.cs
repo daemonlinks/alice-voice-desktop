@@ -37,7 +37,8 @@ public sealed class VoiceBackendManager : IVoiceBackendManager
         _backends = new Dictionary<VoiceBackendKind, IVoiceBackend>
         {
             [VoiceBackendKind.AliceVoiceAgent] = new AliceVoiceAgentBackend(),
-            [VoiceBackendKind.LocalOllama] = new LocalOllamaBackend(tts)
+                        [VoiceBackendKind.LocalOllama] = new LocalOllamaBackend(tts),
+                        [VoiceBackendKind.AliceLocal] = new AliceLocalBackend(tts)
         };
         _current = _backends[VoiceBackendKind.AliceVoiceAgent];
 
