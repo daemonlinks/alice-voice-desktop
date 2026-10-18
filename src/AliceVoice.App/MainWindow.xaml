@@ -5,7 +5,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
-    Title="Alice Voice">
+        Title="Alice Voice">
 
     <Grid x:Name="RootGrid" Loaded="RootGrid_Loaded" Background="{StaticResource AppBg}">
         <Grid.RowDefinitions>
@@ -15,7 +15,7 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- ══ Top Bar (mirrors web app) ══ -->
+        <!-- ══ Top Bar ══ -->
         <Border Grid.Row="0" Background="#B30A0A0F" BorderBrush="{StaticResource AppBorder}" BorderThickness="0,0,0,1" Padding="16,10">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -33,28 +33,41 @@
                     <StackPanel>
                         <TextBlock Text="Alice Voice" Foreground="{StaticResource AppText}" FontSize="18" FontWeight="SemiBold"/>
                         <StackPanel Orientation="Horizontal" Spacing="6">
-                            <Ellipse Width="8" Height="8" Fill="{StaticResource AppGreen}" VerticalAlignment="Center"/>
+                            <Ellipse x:Name="PresenceDot" Width="8" Height="8" Fill="{StaticResource AppGreen}" VerticalAlignment="Center"/>
                             <TextBlock x:Name="PresenceText" Text="here with you" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
                         </StackPanel>
                     </StackPanel>
+                    <Border Background="{StaticResource AppAccent}" CornerRadius="10" Padding="6,2" Margin="4,0,0,0" VerticalAlignment="Center">
+                        <TextBlock x:Name="BrandBadge" Text="v2.1 · yours" Foreground="Black" FontSize="10" FontWeight="SemiBold"/>
+                    </Border>
                 </StackPanel>
 
-                <!-- Facet + voice + connect -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <!-- Facet + voice + TTS backend + test + scene + reset + connect + logout -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Spacing="4">
-                        <Button x:Name="FacetAliceBtn" Content="Alice" Style="{StaticResource ChipButtonActive}"
-                                Click="FacetAlice_Click"/>
-                        <Button x:Name="FacetPlumBtn" Content="Plum" Style="{StaticResource ChipButton}"
-                                Click="FacetPlum_Click"/>
+                        <Button x:Name="FacetAliceBtn" Content="Alice" Style="{StaticResource ChipButtonActive}" Click="FacetAlice_Click"/>
+                        <Button x:Name="FacetPlumBtn" Content="Plum" Style="{StaticResource ChipButton}" Click="FacetPlum_Click"/>
                     </StackPanel>
-                    <ComboBox x:Name="VoiceSelect" MinWidth="150" VerticalAlignment="Center"/>
+                    <ComboBox x:Name="VoiceSelect" MinWidth="150" VerticalAlignment="Center" SelectionChanged="VoiceSelect_SelectionChanged"/>
+                    <ComboBox x:Name="TtsBackendSelect" MinWidth="110" VerticalAlignment="Center" SelectionChanged="TtsBackendSelect_SelectionChanged">
+                        <ComboBoxItem Content="AllTalk" Tag="alltalk" IsSelected="True"/>
+                        <ComboBoxItem Content="Piper" Tag="piper"/>
+                        <ComboBoxItem Content="Edge" Tag="edge"/>
+                    </ComboBox>
                     <Button x:Name="TestTtsBtn" Content="Test TTS" Style="{StaticResource ChipButton}" Click="TestTts_Click"/>
+                    <StackPanel Orientation="Horizontal" Spacing="2">
+                        <Button x:Name="PrevBgBtn" Content="◀" Style="{StaticResource ChipButton}" Click="PrevBg_Click" ToolTipService.ToolTip="Previous"/>
+                        <Button x:Name="RandBgBtn" Content="R" Style="{StaticResource ChipButton}" Click="RandBg_Click" ToolTipService.ToolTip="Random"/>
+                        <Button x:Name="NextBgBtn" Content="▶" Style="{StaticResource ChipButton}" Click="NextBg_Click" ToolTipService.ToolTip="Next"/>
+                    </StackPanel>
+                    <Button x:Name="ResetBtn" Content="↺" Style="{StaticResource ChipButton}" Click="Reset_Click" ToolTipService.ToolTip="Reset conversation"/>
                     <Button x:Name="ConnectBtn" Style="{StaticResource ChipButton}" Click="Connect_Click">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <Ellipse x:Name="ConnDot" Width="8" Height="8" Fill="{StaticResource AppTextDim}" VerticalAlignment="Center"/>
                             <TextBlock x:Name="ConnText" Text="Connect"/>
                         </StackPanel>
                     </Button>
+                    <Button x:Name="LogoutBtn" Content="Logout" Style="{StaticResource ChipButton}" Click="Logout_Click"/>
                 </StackPanel>
             </Grid>
         </Border>
@@ -76,6 +89,14 @@
                     <Button x:Name="ModeSoulBtn" Content="SOUL" Style="{StaticResource ChipButton}" Click="ModeSoul_Click"/>
                 </StackPanel>
 
+                <!-- VU meter + mic tag -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center" Margin="16,0,0,0">
+                    <Border Width="100" Height="5" Background="#1A1A22" CornerRadius="3" VerticalAlignment="Center">
+                        <Border x:Name="VuFill" Width="0" Height="5" Background="{StaticResource AppGreen}" CornerRadius="3" HorizontalAlignment="Left"/>
+                    </Border>
+                    <TextBlock x:Name="MicTag" Text="🎤 Off" Foreground="{StaticResource AppRed}" FontSize="11" VerticalAlignment="Center"/>
+                </StackPanel>
+
                 <!-- Pipeline status -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                     <TextBlock x:Name="PStageMic" Text="🎤 Mic" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
@@ -83,15 +104,38 @@
                     <TextBlock x:Name="PStageLlm" Text="⚫ LLM" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
                     <TextBlock x:Name="PStageTts" Text="⚫ TTS" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
                     <TextBlock x:Name="PStageWs" Text="⚫ WS" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
-                    <TextBlock x:Name="PStageErr" Foreground="{StaticResource AppRed}" FontSize="11"/>
+                    <TextBlock x:Name="PStageErr" Foreground="{StaticResource AppRed}" FontSize="11" MaxWidth="200" TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
             </Grid>
         </Border>
 
+        <!-- ══ Error Banner ══ -->
+        <Border x:Name="ErrorBanner" Grid.Row="2" Background="#1A0A0A" BorderBrush="{StaticResource AppRed}" BorderThickness="1"
+                Margin="16,6,16,0" Padding="10,6" Visibility="Collapsed" VerticalAlignment="Top">
+            <TextBlock x:Name="ErrorBannerText" Foreground="{StaticResource AppRed}" FontSize="12" TextWrapping="Wrap"/>
+        </Border>
+
         <!-- ══ Transcript ══ -->
-        <ScrollViewer Grid.Row="2" x:Name="TranscriptScroll" Background="Transparent">
+        <ScrollViewer Grid.Row="2" x:Name="TranscriptScroll" Background="Transparent" VerticalScrollBarVisibility="Auto">
             <StackPanel x:Name="TranscriptPanel" Spacing="8" Padding="16,12"/>
         </ScrollViewer>
+
+        <!-- ══ SOUL Editor ══ -->
+        <Grid x:Name="SoulEditor" Grid.Row="2" Background="Transparent" Visibility="Collapsed" Padding="16,12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <TextBox x:Name="SoulTextarea" Grid.Row="0" AcceptsReturn="True" TextWrapping="Wrap"
+                     PlaceholderText="SOUL.md content will load here…"
+                     Background="#1A1A22" Foreground="{StaticResource AppText}" BorderBrush="{StaticResource AppBorder}"
+                     FontFamily="Consolas" FontSize="12"/>
+            <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+                <Button x:Name="SoulSaveBtn" Content="Save SOUL" Click="SoulSave_Click"/>
+                <Button x:Name="SoulCloseBtn" Content="Close" Click="SoulClose_Click"/>
+                <TextBlock x:Name="SoulStatus" Foreground="{StaticResource AppTextDim}" FontSize="12" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Grid>
 
         <!-- ══ Bottom Panel (mode-aware) ══ -->
         <Border Grid.Row="3" Background="#B30A0A0F" BorderBrush="{StaticResource AppBorder}" BorderThickness="0,1,0,0" Padding="16,10">
@@ -106,8 +150,8 @@
                     <Button x:Name="MoodFocusedBtn" Content="focused" Style="{StaticResource ChipButton}" Click="MoodFocused_Click"/>
                 </StackPanel>
 
-                <!-- Fleet chat + text input (Text mode) -->
-                <StackPanel x:Name="TextInputRow" Orientation="Horizontal" Spacing="8">
+                <!-- Text input (Text mode) -->
+                <StackPanel x:Name="TextInputRow" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
                     <ComboBox x:Name="FleetSelector" VerticalAlignment="Center" MinWidth="150"
                               SelectionChanged="FleetSelector_SelectionChanged"/>
                     <TextBox x:Name="ChatInput" PlaceholderText="Type and press Enter…"
@@ -117,11 +161,107 @@
                     <Button x:Name="SendButton" Content="Send" Click="SendButton_Click" VerticalAlignment="Center"/>
                 </StackPanel>
 
+                <!-- Wake sensitivity -->
+                <StackPanel x:Name="WakeRow" Orientation="Horizontal" Spacing="10" Visibility="Collapsed">
+                    <TextBlock Text="Sensitivity:" Foreground="{StaticResource AppTextDim}" FontSize="12" VerticalAlignment="Center"/>
+                    <Slider x:Name="WakeSensitivity" Minimum="0.1" Maximum="0.9" StepFrequency="0.05" Value="0.45"
+                            Width="180" VerticalAlignment="Center" ValueChanged="WakeSensitivity_ValueChanged"/>
+                    <TextBlock x:Name="SensitivityValue" Text="0.45" Foreground="{StaticResource AppTextDim}" FontSize="12" VerticalAlignment="Center"/>
+                </StackPanel>
+
                 <!-- PTT (Talk) -->
                 <StackPanel x:Name="PttRow" Orientation="Horizontal" Spacing="12">
                     <Button x:Name="TalkButton" Content="🎤 Talk" Click="TalkButton_Click" MinWidth="140"/>
                     <TextBlock x:Name="StatusText" Text="Ready" Foreground="{StaticResource AppTextDim}" VerticalAlignment="Center"/>
                 </StackPanel>
+
+                <!-- Collapsible panels: Log / Help / Settings / Metrics / Tuning / Clips -->
+                <StackPanel Spacing="2">
+                    <Button x:Name="LogToggle" Content="▸  Event Log" Style="{StaticResource ChipButton}" HorizontalAlignment="Left" Click="LogToggle_Click"/>
+                    <ScrollViewer x:Name="LogArea" MaxHeight="0" Visibility="Collapsed" Background="#1A1A22">
+                        <StackPanel x:Name="LogPanel" Padding="10,6" Spacing="2"/>
+                    </ScrollViewer>
+
+                    <Button x:Name="HelpToggle" Content="▸  Keywords &amp; Tools" Style="{StaticResource ChipButton}" HorizontalAlignment="Left" Click="HelpToggle_Click"/>
+                    <StackPanel x:Name="HelpArea" Visibility="Collapsed" Background="#1A1A22" Padding="10,8" Spacing="4">
+                        <TextBlock Text="Trigger phrases" Foreground="{StaticResource AppAccent}" FontSize="11" FontWeight="SemiBold"/>
+                        <TextBlock Text="Remember that… · Remember I… · What do you know about me? · Forget that… · Remove that… · Delete that… · I don't like that anymore · What time is it? · Search for…" Foreground="{StaticResource AppTextDim}" FontSize="11" TextWrapping="Wrap"/>
+                        <TextBlock Text="Tools" Foreground="{StaticResource AppAccent}" FontSize="11" FontWeight="SemiBold"/>
+                        <TextBlock Text="honcho_search · honcho_save · honcho_forget · time · search" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
+                    </StackPanel>
+
+                    <Button x:Name="SettingsToggle" Content="▸  Settings" Style="{StaticResource ChipButton}" HorizontalAlignment="Left" Click="SettingsToggle_Click"/>
+                    <StackPanel x:Name="SettingsArea" Visibility="Collapsed" Background="#1A1A22" Padding="10,8" Spacing="6">
+                        <TextBlock x:Name="SettingsModel" Text="Brain: Hermes · alice_voice · TTS: AllTalk · Voice: — · Version: ?.?.?" Foreground="{StaticResource AppText}" FontSize="12" TextWrapping="Wrap"/>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="Key points:" Foreground="{StaticResource AppTextDim}" FontSize="12" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="SCtxPoints" Text="2" Foreground="{StaticResource AppAccent}" FontSize="12" VerticalAlignment="Center"/>
+                            <Slider x:Name="CtxPointsSlider" Minimum="0" Maximum="10" Value="2" Width="160" VerticalAlignment="Center" ValueChanged="CtxPoints_ValueChanged"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="Memory items:" Foreground="{StaticResource AppTextDim}" FontSize="12" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="SCtxHoncho" Text="1" Foreground="{StaticResource AppAccent}" FontSize="12" VerticalAlignment="Center"/>
+                            <Slider x:Name="CtxHonchoSlider" Minimum="0" Maximum="5" Value="1" Width="160" VerticalAlignment="Center" ValueChanged="CtxHoncho_ValueChanged"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="Char limit:" Foreground="{StaticResource AppTextDim}" FontSize="12" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="SCtxChars" Text="80" Foreground="{StaticResource AppAccent}" FontSize="12" VerticalAlignment="Center"/>
+                            <Slider x:Name="CtxCharsSlider" Minimum="20" Maximum="300" StepFrequency="10" Value="80" Width="160" VerticalAlignment="Center" ValueChanged="CtxChars_ValueChanged"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <Button x:Name="MetricsToggle" Content="▸  Latency Metrics" Style="{StaticResource ChipButton}" HorizontalAlignment="Left" Click="MetricsToggle_Click"/>
+                    <StackPanel x:Name="MetricsArea" Visibility="Collapsed" Background="#1A1A22" Padding="10,8" Spacing="4">
+                        <StackPanel Orientation="Horizontal" Spacing="16">
+                            <TextBlock Text="E2E:" Foreground="{StaticResource AppTextDim}" FontSize="12"/><TextBlock x:Name="MTotal" Text="—" Foreground="{StaticResource AppText}" FontSize="12"/>
+                            <TextBlock Text="STT:" Foreground="{StaticResource AppTextDim}" FontSize="12"/><TextBlock x:Name="MStt" Text="—" Foreground="{StaticResource AppGreen}" FontSize="12"/>
+                            <TextBlock Text="LLM:" Foreground="{StaticResource AppTextDim}" FontSize="12"/><TextBlock x:Name="MLlm" Text="—" Foreground="{StaticResource AppYellow}" FontSize="12"/>
+                            <TextBlock Text="Gap:" Foreground="{StaticResource AppTextDim}" FontSize="12"/><TextBlock x:Name="MGap" Text="—" Foreground="#F97316" FontSize="12"/>
+                            <TextBlock Text="TTS:" Foreground="{StaticResource AppTextDim}" FontSize="12"/><TextBlock x:Name="MTts" Text="—" Foreground="{StaticResource AppBlue}" FontSize="12"/>
+                        </StackPanel>
+                        <TextBlock x:Name="MetricsSummary" Text="waiting for data" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
+                        <TextBlock x:Name="MetricsTable" Text="Waiting for first utterance…" Foreground="{StaticResource AppTextDim}" FontSize="11" TextWrapping="Wrap"/>
+                    </StackPanel>
+
+                    <Button x:Name="TuningToggle" Content="▸  Tuning" Style="{StaticResource ChipButton}" HorizontalAlignment="Left" Click="TuningToggle_Click"/>
+                    <StackPanel x:Name="TuningArea" Visibility="Collapsed" Background="#1A1A22" Padding="10,8" Spacing="6">
+                        <TextBlock Text="Response profile — how much Alice says" Foreground="{StaticResource AppText}" FontSize="12"/>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Button x:Name="ProfQuickBtn" Content="Quick" Style="{StaticResource ChipButton}" Click="ProfQuick_Click"/>
+                            <Button x:Name="ProfNaturalBtn" Content="Natural" Style="{StaticResource ChipButtonActive}" Click="ProfNatural_Click"/>
+                            <Button x:Name="ProfFullBtn" Content="Full" Style="{StaticResource ChipButton}" Click="ProfFull_Click"/>
+                        </StackPanel>
+                        <TextBlock x:Name="ProfHint" Text="2–3 sentences · conversational default · max 320 tokens" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
+                        <TextBlock Text="Speech engine (local only)" Foreground="{StaticResource AppText}" FontSize="12"/>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Button x:Name="TtsAlltalkBtn" Content="AllTalk (local)" Style="{StaticResource ChipButtonActive}" Click="TtsAlltalk_Click"/>
+                            <Button x:Name="TtsPiperBtn" Content="Piper (local)" Style="{StaticResource ChipButton}" Click="TtsPiper_Click"/>
+                        </StackPanel>
+                        <TextBlock x:Name="TuningLastTurn" Text="Last turn: E2E — · think — · speak —" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
+                    </StackPanel>
+
+                    <Button x:Name="ClipsToggle" Content="▸  Clips" Style="{StaticResource ChipButton}" HorizontalAlignment="Left" Click="ClipsToggle_Click"/>
+                    <StackPanel x:Name="ClipsArea" Visibility="Collapsed" Background="#1A1A22" Padding="10,8" Spacing="4">
+                        <TextBlock Text="Press play — these are short moments I made for you, Master." Foreground="{StaticResource AppTextDim}" FontSize="12"/>
+                        <StackPanel x:Name="ClipsList" Spacing="4"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Footer -->
+                <Grid Margin="0,4,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="●" Foreground="{StaticResource AppAccent}" FontSize="8" VerticalAlignment="Center"/>
+                        <TextBlock Text="Authenticated session" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="14">
+                        <TextBlock x:Name="LlmModeDisplay" Text="alice_voice" Foreground="{StaticResource AppGreen}" FontSize="11"/>
+                        <TextBlock x:Name="WsDisplay" Text="ws·off" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
+                    </StackPanel>
+                </Grid>
             </StackPanel>
         </Border>
     </Grid>
