@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.Extensions.DependencyInjection;
 using Serilog;
 using AliceVoice.Audio;
+using AliceVoice.Core.Chat;
 using AliceVoice.Core.Gpu;
 using AliceVoice.Core.Updates;
 using AliceVoice.Core.Voice;
@@ -18,6 +19,7 @@ public sealed partial class MainWindow : Window
     private readonly IVoiceBackendManager _voice;
     private readonly IMicrophoneCapture _mic;
     private readonly ITtsPlayback _tts;
+    private readonly IFleetChat _chat;
 
     private bool _talking;
 
@@ -31,10 +33,16 @@ public sealed partial class MainWindow : Window
         _voice = App.Services.GetRequiredService<IVoiceBackendManager>();
         _mic = App.Services.GetRequiredService<IMicrophoneCapture>();
         _tts = App.Services.GetRequiredService<ITtsPlayback>();
+        _chat = App.Services.GetRequiredService<IFleetChat>();
 
         _voice.EventReceived += OnVoiceEvent;
         _voice.AudioReceived += OnVoiceAudio;
         _mic.AudioFrameCaptured += OnMicFrame;
+
+        // Populate the fleet selector.
+        foreach (var m in FleetRoster.Members)
+            FleetSelector.Items.Add(new ComboBoxItem { Content = m.DisplayName, Tag = m.Name });
+        FleetSelector.SelectedIndex = 0;
     }
 
     private async void RootGrid_Loaded(object sender, RoutedEventArgs e)
@@ -166,6 +174,56 @@ public sealed partial class MainWindow : Window
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
         StatusText.Text = "Settings coming";
+    }
+
+    private FleetMember? SelectedMember =>
+        FleetSelector.SelectedItem is ComboBoxItem item && item.Tag is string name
+            ? FleetRoster.Find(name)
+            : null;
+
+    private async void SendButton_Click(object sender, RoutedEventArgs e)
+        => await SendChatAsync();
+
+    private async void ChatInput_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Enter)
+            await SendChatAsync();
+    }
+
+    private async Task SendChatAsync()
+    {
+        var member = SelectedMember;
+        var text = ChatInput.Text?.Trim();
+        if (member is null || string.IsNullOrEmpty(text)) return;
+
+        ChatInput.Text = "";
+        AppendTranscript($"You → {member.DisplayName}: {text}");
+        StatusText.Text = $"Talking to {member.DisplayName}…";
+
+        try
+        {
+            var reply = await _chat.SendAsync(member, text);
+            AppendTranscript($"{member.DisplayName}: {reply}");
+            StatusText.Text = $"Replied from {member.DisplayName}";
+        }
+        catch (Exception ex)
+        {
+            AppendTranscript($"{member.DisplayName}: (no reply — {ex.Message})");
+            StatusText.Text = $"Chat failed: {ex.Message}";
+            Log.Error(ex, "Fleet chat to {Member} failed", member.Name);
+        }
+    }
+
+    private async void FleetSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var member = SelectedMember;
+        if (member is null) return;
+
+        StatusText.Text = $"Checking {member.DisplayName}…";
+        var reachable = await _chat.IsReachableAsync(member);
+        StatusText.Text = reachable
+            ? $"{member.DisplayName} reachable"
+            : $"{member.DisplayName} not reachable (no API key / not served)";
     }
 
     private async Task CheckForUpdatesAsync()

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using AliceVoice.Core.Chat;
 using AliceVoice.Core.Gpu;
 using AliceVoice.Core.Updates;
 using AliceVoice.Core.Voice;
@@ -13,6 +14,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAppUpdater>(_ => new HttpAppUpdater(
             "https://raw.githubusercontent.com/daemonlinks/alice-voice-desktop/main/version.json"));
         services.AddSingleton<IVoiceBackendManager, VoiceBackendManager>();
+        services.AddSingleton<IFleetChat, HermesApiFleetChat>();
         return services;
     }
 }
