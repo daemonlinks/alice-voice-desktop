@@ -33,7 +33,7 @@ public sealed class HermesApiFleetChat : IFleetChat
     public HermesApiFleetChat(string baseUrl = "http://127.0.0.1:8642", string? sharedKey = null)
     {
         _baseUrl = baseUrl;
-        _sharedKey = sharedKey ?? Environment.GetEnvironmentVariable("API_SERVER_KEY") ?? "";
+        _sharedKey = sharedKey ?? ApiKeyResolver.Resolve();
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(120) };
     }
 

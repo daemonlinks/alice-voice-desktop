@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Serilog;
+using AliceVoice.Core.Chat;
 
 namespace AliceVoice.Core.Voice;
 
@@ -28,7 +29,7 @@ public sealed class AliceVoiceAgentBackend : IVoiceBackend
     public async Task ConnectAsync(VoiceBackendSettings settings, CancellationToken ct = default)
     {
         Settings = settings;
-        _apiKey = Environment.GetEnvironmentVariable("API_SERVER_KEY") ?? "";
+        _apiKey = ApiKeyResolver.Resolve();
 
         // Verify the agent is reachable via the API server.
         var url = $"{settings.AgentEndpoint}/p/alice_voice/v1/models";
