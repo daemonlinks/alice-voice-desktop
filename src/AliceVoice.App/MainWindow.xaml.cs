@@ -320,10 +320,16 @@ public sealed partial class MainWindow : Window
     private void ModeWake_Click(object sender, RoutedEventArgs e) => SetMode("wake");
     private void ModeText_Click(object sender, RoutedEventArgs e) => SetMode("text");
     private void ModeSoul_Click(object sender, RoutedEventArgs e)
-    {
-        if (_mode == "soul") { SetMode(_lastNonSoulMode); return; }
-        SetMode("soul");
-    }
+        {
+            if (_mode == "soul") { SetMode(_lastNonSoulMode); return; }
+            if (_voice.CurrentKind != VoiceBackendKind.AliceLocal)
+            {
+                StatusText.Text = "SOUL editor is only available on Alice LOCAL";
+                AppendSystem("SOUL editor requires the Alice LOCAL backend — switch Backend to Alice LOCAL first.");
+                return;
+            }
+            SetMode("soul");
+        }
 
     private void SetMode(string mode)
     {
@@ -687,9 +693,12 @@ public sealed partial class MainWindow : Window
             var kind = tag == "alice_local" ? VoiceBackendKind.AliceLocal : VoiceBackendKind.AliceVoiceAgent;
             StatusText.Text = $"Switching to {ci.Content}…";
             try
-            {
-                await _voice.SwitchToAsync(kind);
-                StatusText.Text = $"Backend: {ci.Content}";
+                        {
+                            await _voice.SwitchToAsync(kind);
+                            // If we left Alice LOCAL while in SOUL mode, exit the editor.
+                            if (_mode == "soul" && kind != VoiceBackendKind.AliceLocal)
+                                SetMode(_lastNonSoulMode);
+                            StatusText.Text = $"Backend: {ci.Content}";
             }
             catch (Exception ex)
             {
