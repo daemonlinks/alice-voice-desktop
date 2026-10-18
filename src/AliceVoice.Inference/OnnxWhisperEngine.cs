@@ -32,40 +32,58 @@ public sealed class OnnxWhisperEngine : IWhisperEngine, IDisposable
             {
                 if (_session is not null) return;
 
-                var gpu = _gpu.PreferredInferenceGpu;
-                Log.Information("Warming Whisper on GPU {Index} ({Name})", gpu.Index, gpu.Name);
-
-                var options = new SessionOptions
+                try
                 {
-                    GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
-                    EnableMemoryPattern = true,
-                    ExecutionMode = ExecutionMode.ORT_SEQUENTIAL
-                };
+                    var gpu = _gpu.PreferredInferenceGpu;
+                    Log.Information("Warming Whisper on GPU {Index} ({Name})", gpu.Index, gpu.Name);
 
-                // DirectML = GPU inference. Device id pins to the chosen GPU.
-                options.AppendExecutionProvider("Dml", new Dictionary<string, string>
-                {
-                    ["device_id"] = gpu.Index.ToString()
-                });
+                    var options = new SessionOptions
+                    {
+                        GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
+                        EnableMemoryPattern = true,
+                        ExecutionMode = ExecutionMode.ORT_SEQUENTIAL
+                    };
 
-                // Whisper encoder/decoder ONNX models. Paths are resolved from
-                // the app data dir; the model downloader populates them.
-                var modelDir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "AliceVoice", "models", "whisper");
+                    // DirectML = GPU inference. Device id pins to the chosen GPU.
+                    // Not available in every ONNX Runtime build — if it fails, the
+                    // engine degrades to CPU (or stays unready) without crashing startup.
+                    try
+                    {
+                        options.AppendExecutionProvider("Dml", new Dictionary<string, string>
+                        {
+                            ["device_id"] = gpu.Index.ToString()
+                        });
+                    }
+                    catch (NotSupportedException ex)
+                    {
+                        Log.Warning(ex, "DirectML provider unavailable; Whisper will not use GPU");
+                    }
 
-                var encoderPath = Path.Combine(modelDir, "whisper-encoder.onnx");
-                var decoderPath = Path.Combine(modelDir, "whisper-decoder.onnx");
+                    // Whisper encoder/decoder ONNX models. Paths are resolved from
+                    // the app data dir; the model downloader populates them.
+                    var modelDir = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "AliceVoice", "models", "whisper");
 
-                if (!File.Exists(encoderPath) || !File.Exists(decoderPath))
-                {
-                    Log.Warning("Whisper ONNX models not found at {Dir}. Run the model downloader.", modelDir);
-                    return;
+                    var encoderPath = Path.Combine(modelDir, "whisper-encoder.onnx");
+                    var decoderPath = Path.Combine(modelDir, "whisper-decoder.onnx");
+
+                    if (!File.Exists(encoderPath) || !File.Exists(decoderPath))
+                    {
+                        Log.Warning("Whisper ONNX models not found at {Dir}. Run the model downloader.", modelDir);
+                        return;
+                    }
+
+                    // Load both halves of the model.
+                    _session = new InferenceSession(encoderPath, options);
+                    Log.Information("Whisper encoder loaded on GPU {Index}", gpu.Index);
                 }
-
-                // Load both halves of the model.
-                _session = new InferenceSession(encoderPath, options);
-                Log.Information("Whisper encoder loaded on GPU {Index}", gpu.Index);
+                catch (Exception ex)
+                {
+                    // The local Whisper engine is a fallback path only — the local
+                    // Ollama STT uses faster-whisper via Python. Never crash startup.
+                    Log.Warning(ex, "Whisper warm-up failed; continuing without local engine");
+                }
             }
         }, ct);
     }
