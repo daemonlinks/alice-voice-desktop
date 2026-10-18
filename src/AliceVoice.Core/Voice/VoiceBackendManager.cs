@@ -28,6 +28,8 @@ public interface IVoiceBackendManager : IAsyncDisposable
 public sealed class VoiceBackendManager : IVoiceBackendManager
 {
     private readonly Dictionary<VoiceBackendKind, IVoiceBackend> _backends;
+    private readonly Dictionary<VoiceBackendKind, Task> _connectTasks = new();
+    private readonly SemaphoreSlim _switchLock = new(1, 1);
     private IVoiceBackend _current;
 
     public VoiceBackendManager(ILocalTts tts)
@@ -55,21 +57,31 @@ public sealed class VoiceBackendManager : IVoiceBackendManager
 
     public async Task SwitchToAsync(VoiceBackendKind kind, VoiceBackendSettings? settings = null, CancellationToken ct = default)
     {
-        if (_current.Kind == kind && _current.IsConnected)
+        await _switchLock.WaitAsync(ct);
+        try
         {
-            Log.Information("Already on backend {Kind}", kind);
-            return;
+            if (_current.Kind == kind && _current.IsConnected)
+            {
+                Log.Information("Already on backend {Kind}", kind);
+                return;
+            }
+
+            var next = _backends[kind];
+
+            // Lazy-init: connect once, keep warm. Subsequent switches are O(1).
+            if (!_connectTasks.TryGetValue(kind, out var connectTask) || connectTask.IsFaulted)
+            {
+                connectTask = next.ConnectAsync(settings ?? VoiceBackendSettings.For(kind), ct);
+                _connectTasks[kind] = connectTask;
+            }
+
+            await connectTask;
+            _current = next;
+
+            Log.Information("Switched voice backend to {Kind}", kind);
+            EventReceived?.Invoke(new BackendEvent("backend_switched", $"Backend: {kind}"));
         }
-
-        // Tear down the current backend.
-        await _current.DisposeAsync();
-
-        var next = _backends[kind];
-        await next.ConnectAsync(settings ?? VoiceBackendSettings.For(kind), ct);
-        _current = next;
-
-        Log.Information("Switched voice backend to {Kind}", kind);
-        EventReceived?.Invoke(new BackendEvent("backend_switched", $"Backend: {kind}"));
+        finally { _switchLock.Release(); }
     }
 
     public Task SendAudioAsync(short[] pcm16k, CancellationToken ct = default)
@@ -82,5 +94,6 @@ public sealed class VoiceBackendManager : IVoiceBackendManager
     {
         foreach (var b in _backends.Values)
             await b.DisposeAsync();
+        _switchLock.Dispose();
     }
 }
