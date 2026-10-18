@@ -9,7 +9,12 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<IMicrophoneCapture, WasapiMicrophoneCapture>();
         services.AddSingleton<ITtsPlayback, WasapiTtsPlayback>();
-        services.AddSingleton<ILocalTts, SapiLocalTts>();
+        services.AddSingleton<SapiLocalTts>();
+        services.AddSingleton<ILocalTts>(sp => sp.GetRequiredService<SapiLocalTts>());
+
+        // Voice providers (AllTalk direct HTTP + SAPI).
+        services.AddSingleton<IVoiceProvider, AllTalkTtsProvider>();
+        services.AddSingleton<IVoiceProvider, SapiTtsProvider>();
         return services;
     }
 }

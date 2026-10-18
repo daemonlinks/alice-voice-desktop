@@ -14,6 +14,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAppUpdater>(_ => new HttpAppUpdater(
             "https://raw.githubusercontent.com/daemonlinks/alice-voice-desktop/main/version.json"));
         services.AddSingleton<IVoiceBackendManager, VoiceBackendManager>();
+        services.AddSingleton<IVoiceProviderManager, VoiceProviderManager>();
         services.AddSingleton<IFleetChat, HermesApiFleetChat>();
         return services;
     }

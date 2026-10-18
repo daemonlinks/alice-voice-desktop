@@ -20,7 +20,7 @@ public sealed partial class MainWindow : Window
     private readonly IMicrophoneCapture _mic;
     private readonly ITtsPlayback _tts;
     private readonly IFleetChat _chat;
-    private readonly ILocalTts _localTts;
+    private readonly IVoiceProviderManager _voiceProvider;
 
     private bool _talking;
     private string _facet = "alice";
@@ -38,7 +38,7 @@ public sealed partial class MainWindow : Window
         _mic = App.Services.GetRequiredService<IMicrophoneCapture>();
         _tts = App.Services.GetRequiredService<ITtsPlayback>();
         _chat = App.Services.GetRequiredService<IFleetChat>();
-        _localTts = App.Services.GetRequiredService<ILocalTts>();
+        _voiceProvider = App.Services.GetRequiredService<IVoiceProviderManager>();
 
         _voice.EventReceived += OnVoiceEvent;
         _voice.AudioReceived += OnVoiceAudio;
@@ -165,12 +165,12 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void TestTts_Click(object sender, RoutedEventArgs e)
+    private async void TestTts_Click(object sender, RoutedEventArgs e)
     {
         AppendTranscript("(TTS test)");
         StatusText.Text = "Speaking…";
         PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-        _localTts.Speak("Hello, this is Alice. I can hear you.");
+        await _voiceProvider.SpeakForPersonaAsync(_facet, "Hello, this is Alice. I can hear you.");
         PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
         StatusText.Text = "Ready";
     }
@@ -265,13 +265,13 @@ public sealed partial class MainWindow : Window
             AppendTranscript($"{member.DisplayName}: {reply}");
             StatusText.Text = $"Replied from {member.DisplayName}";
 
-            // Speak the reply through instant local TTS.
-            if (!string.IsNullOrWhiteSpace(reply))
-            {
-                PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-                _localTts.Speak(reply);
-                PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
-            }
+            // Speak the reply through the persona's assigned voice provider.
+                        if (!string.IsNullOrWhiteSpace(reply))
+                        {
+                            PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
+                            await _voiceProvider.SpeakForPersonaAsync(_facet, reply);
+                            PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
+                        }
         }
         catch (Exception ex)
         {
