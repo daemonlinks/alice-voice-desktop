@@ -3,8 +3,8 @@ using Serilog;
 namespace AliceVoice.Core.Voice;
 
 /// <summary>
-/// Owns the current voice backend and switches between the three states
-/// (Relay / alice_voice agent / local Ollama) at runtime. The app talks to
+/// Owns the current voice backend and switches between the states
+/// (alice_voice agent / local Ollama) at runtime. The app talks to
 /// this manager, never to a backend directly.
 /// </summary>
 public interface IVoiceBackendManager : IAsyncDisposable
@@ -36,11 +36,10 @@ public sealed class VoiceBackendManager : IVoiceBackendManager
     {
         _backends = new Dictionary<VoiceBackendKind, IVoiceBackend>
         {
-            [VoiceBackendKind.Relay] = new RelayBackend(),
             [VoiceBackendKind.AliceVoiceAgent] = new AliceVoiceAgentBackend(),
             [VoiceBackendKind.LocalOllama] = new LocalOllamaBackend(tts)
         };
-        _current = _backends[VoiceBackendKind.Relay];
+        _current = _backends[VoiceBackendKind.AliceVoiceAgent];
 
         foreach (var b in _backends.Values)
         {

@@ -1,14 +1,11 @@
 namespace AliceVoice.Core.Voice;
 
 /// <summary>
-/// The three operating states of the app. Each routes the voice pipeline
+/// The operating states of the app. Each routes the voice pipeline
 /// (STT → LLM → TTS) through a different backend.
 /// </summary>
 public enum VoiceBackendKind
 {
-    /// <summary>Existing Alice Voice web relay (ws://localhost:9876).</summary>
-    Relay,
-
     /// <summary>The alice_voice Hermes agent (voice + provider/model settings).</summary>
     AliceVoiceAgent,
 
@@ -37,20 +34,11 @@ public sealed record VoiceBackendSettings
     public string TtsVoice { get; init; } = "en-GB-SoniaNeural";
 
     // Endpoints
-    public string RelayUrl { get; init; } = "ws://localhost:9876";
     public string OllamaUrl { get; init; } = "http://localhost:11434";
     public string AgentEndpoint { get; init; } = "http://localhost:9876";
 
     public static VoiceBackendSettings For(VoiceBackendKind kind) => kind switch
     {
-        VoiceBackendKind.Relay => new VoiceBackendSettings
-        {
-            Kind = kind,
-            Provider = "openrouter",
-            Model = "cydonia-24b-v4.1",
-            SttEngine = "whisper",
-            TtsEngine = "alltalk"
-        },
         VoiceBackendKind.AliceVoiceAgent => new VoiceBackendSettings
         {
             Kind = kind,
