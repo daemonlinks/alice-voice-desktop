@@ -175,7 +175,8 @@ public sealed class AliceLocalBackend : IVoiceBackend
                 var body = new
                 {
                     model = Settings.Model,
-                    prompt = $"{system}\n\n---\n\n{conversation}",
+                    system = system,
+                    prompt = conversation,
                     stream = false
                 };
 
