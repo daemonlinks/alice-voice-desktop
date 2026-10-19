@@ -172,19 +172,33 @@ public sealed class AliceLocalBackend : IVoiceBackend
             var conversation = prompt;
             for (int turn = 0; turn < 4; turn++)
             {
+                // Prevent the model from looping the same tool call in a row.
+                var thinking = new System.Text.StringBuilder();
+
                 var body = new
                 {
                     model = Settings.Model,
                     system = system,
                     prompt = conversation,
-                    stream = false
+                    stream = true
                 };
 
                 using var resp = await _http.PostAsJsonAsync($"{Settings.OllamaUrl}/api/generate", body, ct);
                 resp.EnsureSuccessStatusCode();
 
-                using var doc = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
-                var reply = doc.RootElement.GetProperty("response").GetString() ?? string.Empty;
+                var reply = string.Empty;
+                using (var stream = await resp.Content.ReadAsStreamAsync(ct))
+                using (var reader = new System.IO.StreamReader(stream))
+                {
+                    while (!reader.EndOfStream)
+                    {
+                        var line = await reader.ReadLineAsync(ct);
+                        if (string.IsNullOrWhiteSpace(line)) continue;
+                        using var doc = System.Text.Json.JsonDocument.Parse(line);
+                        var frag = doc.RootElement.GetProperty("response").GetString() ?? string.Empty;
+                        reply += frag;
+                    }
+                }
 
                 // If the reply is a tool call, execute it and feed the result back.
                 if (TryParseToolCall(reply, out var tool, out var args))

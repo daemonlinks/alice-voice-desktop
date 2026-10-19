@@ -634,7 +634,8 @@ public sealed partial class MainWindow : Window
                             {
                                 var local = _voice.Current as AliceLocalBackend;
                                 var reply = local is null ? string.Empty : await local.AskAsync(text);
-                                AppendAlice(reply);
+                                // AskAsync raises a reply_text event that OnVoiceEvent
+                                // already appends — do NOT append here (would double it).
                     StatusText.Text = "Replied from Alice LOCAL";
                     if (!string.IsNullOrWhiteSpace(reply))
                     {
