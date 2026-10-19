@@ -97,8 +97,10 @@ public sealed partial class MainWindow : Window
                         SetConnected(true);
                         Log.Information("Alice Voice started");
             _ = CheckForUpdatesAsync();
-            _ = LoadVoicesForSelectedProviderAsync();
-            AppendSystem("Talk to me, Master.");
+                        _ = LoadVoicesForSelectedProviderAsync();
+                        AppendSystem("Talk to me, Master.");
+                        UpdateStatusPanel();
+                        SetActivity("Ready", "Alice LOCAL · local (Ollama)");
         }
         catch (Exception ex)
         {
@@ -179,6 +181,7 @@ public sealed partial class MainWindow : Window
             ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"]
             : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
         WsDisplay.Text = connected ? "ws·on" : "ws·off";
+        UpdateStatusPanel();
     }
 
     private void Reset_Click(object sender, RoutedEventArgs e)
@@ -292,6 +295,7 @@ public sealed partial class MainWindow : Window
         }
         AddLog($"Voice provider: {kind}");
         await LoadVoicesForSelectedProviderAsync();
+        UpdateStatusPanel();
     }
 
     private void VoiceSelect_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -305,6 +309,7 @@ public sealed partial class MainWindow : Window
             SaveMemberVoices();
         }
         AddLog($"Voice: {voice.Replace(".wav", "").Replace("_", " ")}");
+        UpdateStatusPanel();
     }
 
     // ── Test TTS ──
@@ -315,6 +320,7 @@ public sealed partial class MainWindow : Window
             var profile = new VoiceProfile(provider, voice);
             AppendSystem($"voice test — {provider} · {voice.Replace(".wav", "").Replace("_", " ")}");
             StatusText.Text = "Speaking…";
+            SetActivity("Speaking…", $"{provider} · {voice.Replace(".wav", "").Replace("_", " ")}");
             PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
             await _voiceProvider.SpeakAsync(profile, "Hello Master. This is a voice quality test.");
             PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
@@ -484,20 +490,24 @@ public sealed partial class MainWindow : Window
             switch (evt.Type)
             {
                 case "transcript":
-                    AppendUser(evt.Text);
-                    PStageStt.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-                    break;
-                case "reply_text":
-                    AppendAlice(evt.Text);
-                    PStageLlm.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-                    break;
-                case "tts_start":
-                    PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-                    StatusText.Text = "Speaking…";
-                    break;
-                case "tts_end":
-                    StatusText.Text = "Ready";
-                    break;
+                                    AppendUser(evt.Text);
+                                    PStageStt.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
+                                    SetActivity("Transcribing…", evt.Text);
+                                    break;
+                                case "reply_text":
+                                    AppendAlice(evt.Text);
+                                    PStageLlm.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
+                                    SetActivity("Thinking…", evt.Text);
+                                    break;
+                                case "tts_start":
+                                    PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
+                                    StatusText.Text = "Speaking…";
+                                    SetActivity("Speaking…");
+                                    break;
+                                case "tts_end":
+                                    StatusText.Text = "Ready";
+                                    SetActivity("Ready");
+                                    break;
                 case "backend_switched":
                     StatusText.Text = evt.Text;
                     break;
@@ -630,6 +640,7 @@ public sealed partial class MainWindow : Window
             {
                 AppendUser($"{text} → Alice LOCAL");
                             StatusText.Text = "Talking to Alice LOCAL…";
+                            SetActivity("Thinking…", text);
                             try
                             {
                                 var local = _voice.Current as AliceLocalBackend;
@@ -655,6 +666,7 @@ public sealed partial class MainWindow : Window
 
             AppendUser($"{text} → {member.DisplayName}");
             StatusText.Text = $"Talking to {member.DisplayName}…";
+            SetActivity("Thinking…", text);
 
             try
             {
@@ -686,6 +698,8 @@ public sealed partial class MainWindow : Window
                     {
                         await _voice.SwitchToAsync(VoiceBackendKind.AliceLocal);
                         StatusText.Text = "Alice LOCAL";
+                        UpdateStatusPanel();
+                        SetActivity("Ready", "Alice LOCAL");
                     }
                     catch (Exception ex)
                     {
@@ -717,6 +731,8 @@ public sealed partial class MainWindow : Window
                 StatusText.Text = reachable
                     ? $"{member.DisplayName} reachable"
                     : $"{member.DisplayName} not reachable (no API key / not served)";
+                UpdateStatusPanel();
+                SetActivity(reachable ? "Ready" : "Offline", member.DisplayName);
             }
 
     // ── PTT ──
@@ -729,19 +745,21 @@ public sealed partial class MainWindow : Window
             TalkButton.Content = "■ Stop";
             PStageMic.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
             MicTag.Text = "🎤 On";
-            MicTag.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-            StatusText.Text = "Listening…";
-        }
-        else
-        {
-            await _mic.StopAsync();
-            _talking = false;
-            TalkButton.Content = "🎤 Talk";
-            PStageMic.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
-            MicTag.Text = "🎤 Off";
-            MicTag.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppRed"];
-            StatusText.Text = "Ready";
-        }
+                        MicTag.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
+                        StatusText.Text = "Listening…";
+                        SetActivity("Listening…");
+                    }
+                    else
+                    {
+                        await _mic.StopAsync();
+                        _talking = false;
+                        TalkButton.Content = "🎤 Talk";
+                        PStageMic.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
+                        MicTag.Text = "🎤 Off";
+                        MicTag.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppRed"];
+                        StatusText.Text = "Ready";
+                        SetActivity("Ready");
+                    }
     }
 
     // ── Log / Error ──
@@ -763,17 +781,43 @@ public sealed partial class MainWindow : Window
     }
 
     private async Task CheckForUpdatesAsync()
+        {
+            try
+            {
+                var release = await _updater.CheckForUpdateAsync();
+                if (release is null) return;
+                StatusText.Text = $"Update available: {release.Version}";
+                Log.Information("Update {Version} available", release.Version);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Background update check failed");
+            }
+        }
+    // ── Pinned status panel + live activity line ──
+    private void SetActivity(string state, string? detail = null)
     {
-        try
+        if (ActivityLine is null) return;
+        ActivityLine.Text = state;
+        ActivityDetail.Text = detail ?? "";
+        ActivityDot.Fill = state switch
         {
-            var release = await _updater.CheckForUpdateAsync();
-            if (release is null) return;
-            StatusText.Text = $"Update available: {release.Version}";
-            Log.Information("Update {Version} available", release.Version);
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Background update check failed");
-        }
+            "Listening…" or "Transcribing…" or "Thinking…" or "Speaking…" or "Connecting…" or "Talking to Alice LOCAL…" => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppYellow"],
+            "Ready" or "Replied from Alice LOCAL" or "here with you" => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"],
+            _ => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"]
+        };
+    }
+
+    private void UpdateStatusPanel()
+    {
+        if (StatusAgent is null) return;
+        StatusAgent.Text = IsAliceLocalSelected ? "Alice LOCAL" : (SelectedMember?.DisplayName ?? "—");
+        StatusBackend.Text = _voice.CurrentKind == VoiceBackendKind.AliceLocal ? "local (Ollama)" : "agent (Hermes)";
+        StatusProvider.Text = SelectedProvider?.ToString() ?? "—";
+        StatusVoice.Text = VoiceSelect.SelectedItem is ComboBoxItem vci && vci.Tag is string v ? v.Replace(".wav", "").Replace("_", " ") : "—";
+        StatusConn.Text = _connected ? "connected" : "offline";
+        StatusConn.Foreground = _connected
+            ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"]
+            : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
     }
 }

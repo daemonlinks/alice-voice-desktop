@@ -15,7 +15,7 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- ══ Top Bar ══ -->
+        <!-- ══ Header ══ -->
         <Border Grid.Row="0" Background="#B30A0A0F" BorderBrush="{StaticResource AppBorder}" BorderThickness="0,0,0,1" Padding="16,10">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -43,11 +43,11 @@
                 </StackPanel>
 
                 <!-- Agent + voice provider + voice + test + scene + reset + connect -->
-                                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                                                    <StackPanel Orientation="Horizontal" Spacing="4">
-                                                                        <TextBlock Text="Agent" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
-                                                                        <ComboBox x:Name="FleetSelector" MinWidth="170" VerticalAlignment="Center" SelectionChanged="FleetSelector_SelectionChanged"/>
-                                                                    </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Agent" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="FleetSelector" MinWidth="170" VerticalAlignment="Center" SelectionChanged="FleetSelector_SelectionChanged"/>
+                    </StackPanel>
                     <StackPanel Orientation="Horizontal" Spacing="4">
                         <TextBlock Text="Provider" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
                         <ComboBox x:Name="VoiceProviderSelect" MinWidth="110" VerticalAlignment="Center" SelectionChanged="VoiceProviderSelect_SelectionChanged"/>
@@ -69,45 +69,53 @@
                             <TextBlock x:Name="ConnText" Text="Connect"/>
                         </StackPanel>
                     </Button>
-                                    </StackPanel>
+                </StackPanel>
             </Grid>
         </Border>
 
-        <!-- ══ Control Panel (modes + pipeline) ══ -->
+        <!-- ══ Pinned Status Panel (always visible) ══ -->
         <Border Grid.Row="1" Background="#B30A0A0F" BorderBrush="{StaticResource AppBorder}" BorderThickness="0,0,0,1" Padding="16,8">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-
-                <!-- Mode buttons -->
-                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
-                    <Button x:Name="ModePttBtn" Content="PTT" Style="{StaticResource ChipButtonActive}" Click="ModePtt_Click"/>
-                    <Button x:Name="ModeWakeBtn" Content="Wake" Style="{StaticResource ChipButton}" Click="ModeWake_Click"/>
-                    <Button x:Name="ModeTextBtn" Content="Text" Style="{StaticResource ChipButton}" Click="ModeText_Click"/>
-                    <Button x:Name="ModeSoulBtn" Content="SOUL" Style="{StaticResource ChipButton}" Click="ModeSoul_Click"/>
+            <StackPanel Spacing="6">
+                <!-- Live activity line -->
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Ellipse x:Name="ActivityDot" Width="8" Height="8" Fill="{StaticResource AppTextDim}" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="ActivityLine" Text="Ready" Foreground="{StaticResource AppText}" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="ActivityDetail" Text="" Foreground="{StaticResource AppTextDim}" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
 
-                <!-- VU meter + mic tag -->
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center" Margin="16,0,0,0">
-                    <Border Width="100" Height="5" Background="#1A1A22" CornerRadius="3" VerticalAlignment="Center">
-                        <Border x:Name="VuFill" Width="0" Height="5" Background="{StaticResource AppGreen}" CornerRadius="3" HorizontalAlignment="Left"/>
-                    </Border>
-                    <TextBlock x:Name="MicTag" Text="🎤 Off" Foreground="{StaticResource AppRed}" FontSize="11" VerticalAlignment="Center"/>
+                <!-- Pinned status row -->
+                <StackPanel Orientation="Horizontal" Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Agent:" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="StatusAgent" Text="Alice LOCAL" Foreground="{StaticResource AppText}" FontSize="11" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Backend:" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="StatusBackend" Text="local" Foreground="{StaticResource AppText}" FontSize="11" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Provider:" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="StatusProvider" Text="—" Foreground="{StaticResource AppText}" FontSize="11" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Voice:" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="StatusVoice" Text="—" Foreground="{StaticResource AppText}" FontSize="11" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Connection:" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="StatusConn" Text="offline" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Pipeline:" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="PStageMic" Text="🎤 Mic" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="PStageStt" Text="⚫ STT" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="PStageLlm" Text="⚫ LLM" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="PStageTts" Text="⚫ TTS" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="PStageWs" Text="⚫ WS" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <TextBlock x:Name="PStageErr" Foreground="{StaticResource AppRed}" FontSize="11" MaxWidth="200" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
                 </StackPanel>
-
-                <!-- Pipeline status -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <TextBlock x:Name="PStageMic" Text="🎤 Mic" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
-                    <TextBlock x:Name="PStageStt" Text="⚫ STT" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
-                    <TextBlock x:Name="PStageLlm" Text="⚫ LLM" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
-                    <TextBlock x:Name="PStageTts" Text="⚫ TTS" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
-                    <TextBlock x:Name="PStageWs" Text="⚫ WS" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
-                    <TextBlock x:Name="PStageErr" Foreground="{StaticResource AppRed}" FontSize="11" MaxWidth="200" TextTrimming="CharacterEllipsis"/>
-                </StackPanel>
-            </Grid>
+            </StackPanel>
         </Border>
 
         <!-- ══ Error Banner ══ -->
@@ -141,14 +149,30 @@
         <!-- ══ Bottom Panel (mode-aware) ══ -->
         <Border Grid.Row="3" Background="#B30A0A0F" BorderBrush="{StaticResource AppBorder}" BorderThickness="0,1,0,0" Padding="16,10">
             <StackPanel Spacing="8">
-                <!-- Mood chips -->
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                    <TextBlock Text="mood" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
-                    <Button x:Name="MoodNaturalBtn" Content="natural" Style="{StaticResource ChipButtonActive}" Click="MoodNatural_Click"/>
-                    <Button x:Name="MoodComfortBtn" Content="comfort" Style="{StaticResource ChipButton}" Click="MoodComfort_Click"/>
-                    <Button x:Name="MoodPlayfulBtn" Content="playful" Style="{StaticResource ChipButton}" Click="MoodPlayful_Click"/>
-                    <Button x:Name="MoodFlirtyBtn" Content="flirty" Style="{StaticResource ChipButton}" Click="MoodFlirty_Click"/>
-                    <Button x:Name="MoodFocusedBtn" Content="focused" Style="{StaticResource ChipButton}" Click="MoodFocused_Click"/>
+                <!-- Mode + mood + mic -->
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <Button x:Name="ModePttBtn" Content="PTT" Style="{StaticResource ChipButtonActive}" Click="ModePtt_Click"/>
+                        <Button x:Name="ModeWakeBtn" Content="Wake" Style="{StaticResource ChipButton}" Click="ModeWake_Click"/>
+                        <Button x:Name="ModeTextBtn" Content="Text" Style="{StaticResource ChipButton}" Click="ModeText_Click"/>
+                        <Button x:Name="ModeSoulBtn" Content="SOUL" Style="{StaticResource ChipButton}" Click="ModeSoul_Click"/>
+                    </StackPanel>
+                    <Border Width="1" Height="20" Background="{StaticResource AppBorder}" VerticalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="mood" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
+                        <Button x:Name="MoodNaturalBtn" Content="natural" Style="{StaticResource ChipButtonActive}" Click="MoodNatural_Click"/>
+                        <Button x:Name="MoodComfortBtn" Content="comfort" Style="{StaticResource ChipButton}" Click="MoodComfort_Click"/>
+                        <Button x:Name="MoodPlayfulBtn" Content="playful" Style="{StaticResource ChipButton}" Click="MoodPlayful_Click"/>
+                        <Button x:Name="MoodFlirtyBtn" Content="flirty" Style="{StaticResource ChipButton}" Click="MoodFlirty_Click"/>
+                        <Button x:Name="MoodFocusedBtn" Content="focused" Style="{StaticResource ChipButton}" Click="MoodFocused_Click"/>
+                    </StackPanel>
+                    <Border Width="1" Height="20" Background="{StaticResource AppBorder}" VerticalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                        <Border Width="100" Height="5" Background="#1A1A22" CornerRadius="3" VerticalAlignment="Center">
+                            <Border x:Name="VuFill" Width="0" Height="5" Background="{StaticResource AppGreen}" CornerRadius="3" HorizontalAlignment="Left"/>
+                        </Border>
+                        <TextBlock x:Name="MicTag" Text="🎤 Off" Foreground="{StaticResource AppRed}" FontSize="11" VerticalAlignment="Center"/>
+                    </StackPanel>
                 </StackPanel>
 
                 <!-- Text input (Text mode) -->
@@ -238,11 +262,10 @@
                         </StackPanel>
                         <TextBlock x:Name="TuningLastTurn" Text="Last turn: E2E — · think — · speak —" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
                     </StackPanel>
+                </StackPanel>
 
-                    </StackPanel>
-
-                                    <!-- Footer -->
-                                    <Grid Margin="0,4,0,0">
+                <!-- Footer -->
+                <Grid Margin="0,4,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
