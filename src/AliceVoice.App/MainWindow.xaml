@@ -126,7 +126,7 @@
 
         <!-- ══ Transcript ══ -->
         <ScrollViewer Grid.Row="2" x:Name="TranscriptScroll" Background="Transparent" VerticalScrollBarVisibility="Auto">
-            <StackPanel x:Name="TranscriptPanel" Spacing="8" Padding="16,12"/>
+                    <StackPanel x:Name="TranscriptPanel" Spacing="8" Padding="16,12"/>
         </ScrollViewer>
 
         <!-- ══ SOUL Editor ══ -->

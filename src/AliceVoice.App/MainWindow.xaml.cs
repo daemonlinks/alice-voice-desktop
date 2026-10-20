@@ -541,18 +541,18 @@ public sealed partial class MainWindow : Window
         _turnSeq += 1;
         var n = _turnSeq;
         var d = new Border
-        {
-            Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(0x0F, 0xFF, 0x3B, 0x3B)),
-            BorderBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(0x1A, 0xFF, 0x3B, 0x3B)),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(12, 12, 4, 12),
-            Padding = new Thickness(12, 8, 12, 8),
-            HorizontalAlignment = HorizontalAlignment.Right,
-            MaxWidth = 600,
-            Margin = new Thickness(0, 0, 0, 8)
-        };
-        var stack = new StackPanel();
-        stack.Children.Add(new TextBlock { Text = $"You  #{n} · {DateTime.Now:HH:mm:ss}", FontSize = 10, Opacity = 0.5, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppText"] });
+                {
+                    Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(0xE6, 0x00, 0x00, 0x00)),
+                    BorderBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(0x66, 0xFF, 0x3B, 0x3B)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(12, 12, 12, 4),
+                    Padding = new Thickness(12, 8, 12, 8),
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    MaxWidth = 600,
+                    Margin = new Thickness(0, 0, 0, 8)
+                };
+                    var stack = new StackPanel();
+                    stack.Children.Add(new TextBlock { Text = $"You  #{n} · {DateTime.Now:HH:mm:ss}", FontSize = 10, Opacity = 0.5, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppText"] });
         stack.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppText"] });
         d.Child = stack;
         TranscriptPanel.Children.Add(d);
@@ -563,18 +563,18 @@ public sealed partial class MainWindow : Window
     {
         var n = _turnSeq;
         var d = new Border
-        {
-            Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(0x0A, 0xFF, 0xFF, 0xFF)),
-            BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppBorder"],
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(12, 12, 12, 4),
-            Padding = new Thickness(12, 8, 12, 8),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            MaxWidth = 600,
-            Margin = new Thickness(0, 0, 0, 8)
-        };
-        var stack = new StackPanel();
-        var who = SelectedMember?.DisplayName ?? "Alice";
+                {
+                    Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(0xE6, 0x00, 0x00, 0x00)),
+                    BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppBorder"],
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(12, 12, 4, 12),
+                    Padding = new Thickness(12, 8, 12, 8),
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    MaxWidth = 600,
+                    Margin = new Thickness(0, 0, 0, 8)
+                };
+                    var stack = new StackPanel();
+                    var who = SelectedMember?.DisplayName ?? "Alice";
         stack.Children.Add(new TextBlock { Text = $"{who}  #{n} · {DateTime.Now:HH:mm:ss}", FontSize = 10, Opacity = 0.5, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppText"] });
         stack.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppText"] });
         var remember = new Button
@@ -595,15 +595,27 @@ public sealed partial class MainWindow : Window
 
     private void AppendSystem(string text)
     {
-        TranscriptPanel.Children.Add(new TextBlock
+        var pill = new Border
+        {
+            Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(0x99, 0x00, 0x00, 0x00)),
+            BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppBorder"],
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(14),
+            Padding = new Thickness(14, 5, 14, 5),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            MaxWidth = 700,
+            Margin = new Thickness(0, 2, 0, 8)
+        };
+        pill.Child = new TextBlock
         {
             Text = text,
             Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"],
             FontSize = 11,
             FontStyle = Windows.UI.Text.FontStyle.Italic,
             TextAlignment = TextAlignment.Center,
-            Margin = new Thickness(0, 2, 0, 8)
-        });
+            TextWrapping = TextWrapping.Wrap
+        };
+        TranscriptPanel.Children.Add(pill);
         TranscriptScroll.ChangeView(null, TranscriptScroll.ScrollableHeight, null);
     }
 
@@ -692,22 +704,34 @@ public sealed partial class MainWindow : Window
             {
                 // Alice LOCAL is the first Agent entry — selecting it uses the local backend.
                 if (IsAliceLocalSelected)
-                {
-                    StatusText.Text = "Switching to Alice LOCAL…";
-                    try
-                    {
-                        await _voice.SwitchToAsync(VoiceBackendKind.AliceLocal);
-                        StatusText.Text = "Alice LOCAL";
-                        UpdateStatusPanel();
-                        SetActivity("Ready", "Alice LOCAL");
-                    }
-                    catch (Exception ex)
-                    {
-                        StatusText.Text = $"Alice LOCAL switch failed: {ex.Message}";
-                        Log.Error(ex, "Alice LOCAL switch failed");
-                    }
-                    return;
-                }
+                                {
+                                    StatusText.Text = "Switching to Alice LOCAL…";
+                                    try
+                                    {
+                                        await _voice.SwitchToAsync(VoiceBackendKind.AliceLocal);
+                                        StatusText.Text = "Alice LOCAL";
+                                        UpdateStatusPanel();
+                                        SetActivity("Ready", "Alice LOCAL");
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        StatusText.Text = $"Alice LOCAL switch failed: {ex.Message}";
+                                        Log.Error(ex, "Alice LOCAL switch failed");
+                                    }
+
+                                    // Restore Alice LOCAL's saved voice assignment into the dropdowns
+                                    // (same as the fleet-member branch below).
+                                    if (SelectedMemberName is string localName && _memberVoices.TryGetValue(localName, out var localSaved))
+                                    {
+                                        foreach (var item in VoiceProviderSelect.Items)
+                                            if (item is ComboBoxItem pi && pi.Tag is VoiceProviderKind pk && pk == localSaved.Provider)
+                                            { VoiceProviderSelect.SelectedItem = pi; break; }
+                                        foreach (var item in VoiceSelect.Items)
+                                            if (item is ComboBoxItem vi && vi.Tag is string vv && vv == localSaved.Voice)
+                                            { VoiceSelect.SelectedItem = vi; break; }
+                                    }
+                                    return;
+                                }
 
                 var member = SelectedMember;
                 if (member is null) return;
