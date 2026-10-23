@@ -30,7 +30,7 @@ public sealed class HermesApiFleetChat : IFleetChat
     private readonly string _baseUrl;
     private readonly string _sharedKey;
 
-    public HermesApiFleetChat(string baseUrl = "http://127.0.0.1:8642", string? sharedKey = null)
+    public HermesApiFleetChat(string baseUrl = "http://127.0.0.1:8643", string? sharedKey = null)
     {
         _baseUrl = baseUrl;
         _sharedKey = sharedKey ?? ApiKeyResolver.Resolve();
