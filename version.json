@@ -1,6 +1,7 @@
 {
   "version": "0.1.0",
   "downloadUrl": "https://github.com/daemonlinks/alice-voice-desktop/releases/latest/download/AliceVoice.App.msix",
-  "notes": "Initial scaffold: WinUI 3 shell, ONNX Runtime + DirectML GPU inference, WASAPI audio, Serilog logging, self-update.",
+  "sha256": "",
+  "notes": "Initial scaffold: WinUI 3 shell, faster-whisper STT on GPU 1, NAudio audio, Serilog logging, verified self-update check. A release is only offered when sha256 holds the 64-hex SHA-256 of the download.",
   "publishedAt": "2026-10-18T00:00:00Z"
 }

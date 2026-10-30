@@ -1,0 +1,6 @@
+<Project>
+  <!-- Single source of the app version; the self-updater compares it with version.json. -->
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+</Project>
