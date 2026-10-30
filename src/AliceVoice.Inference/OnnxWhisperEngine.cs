@@ -34,8 +34,28 @@ public sealed class OnnxWhisperEngine : IWhisperEngine, IDisposable
 
                 try
                 {
+                    // Placeholder engine (not used for STT — faster-whisper is).
+                    // Check for models BEFORE touching any GPU so a missing model
+                    // never creates a DirectML device.
+                    var modelDir = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "AliceVoice", "models", "whisper");
+                    var encoderPath = Path.Combine(modelDir, "whisper-encoder.onnx");
+                    var decoderPath = Path.Combine(modelDir, "whisper-decoder.onnx");
+                    if (!File.Exists(encoderPath) || !File.Exists(decoderPath))
+                    {
+                        Log.Information("ONNX Whisper models not present at {Dir}; ONNX engine idle (faster-whisper handles STT)", modelDir);
+                        return;
+                    }
+
+                    // Never the render GPU 0; null = no usable voice GPU.
                     var gpu = _gpu.PreferredInferenceGpu;
-                    Log.Information("Warming Whisper on GPU {Index} ({Name})", gpu.Index, gpu.Name);
+                    if (gpu is null)
+                    {
+                        Log.Warning("No voice GPU available; ONNX Whisper engine stays idle");
+                        return;
+                    }
+                    Log.Information("Warming ONNX Whisper on GPU {Index} ({Name})", gpu.Index, gpu.Name);
 
                     var options = new SessionOptions
                     {
@@ -44,34 +64,15 @@ public sealed class OnnxWhisperEngine : IWhisperEngine, IDisposable
                         ExecutionMode = ExecutionMode.ORT_SEQUENTIAL
                     };
 
-                    // DirectML = GPU inference. Device id pins to the chosen GPU.
-                                        // Use the strongly-typed AppendExecutionProviderDML — the
-                                        // string-based AppendExecutionProvider("Dml", ...) does NOT
-                                        // support DirectML (only QNN/SNPE/XNNPACK/AZURE) and throws
-                                        // NotSupportedException. If it still fails, the engine
-                                        // degrades to CPU (or stays unready) without crashing startup.
-                                        try
-                                        {
-                                            options.AppendExecutionProvider_DML(gpu.Index);
-                                        }
-                                        catch (NotSupportedException ex)
-                                        {
-                                            Log.Warning(ex, "DirectML provider unavailable; Whisper will not use GPU");
-                                        }
-
-                    // Whisper encoder/decoder ONNX models. Paths are resolved from
-                    // the app data dir; the model downloader populates them.
-                    var modelDir = Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                        "AliceVoice", "models", "whisper");
-
-                    var encoderPath = Path.Combine(modelDir, "whisper-encoder.onnx");
-                    var decoderPath = Path.Combine(modelDir, "whisper-decoder.onnx");
-
-                    if (!File.Exists(encoderPath) || !File.Exists(decoderPath))
+                    // NOTE: the DirectML device id is the DXGI adapter ordinal,
+                    // which is not guaranteed to match nvidia-smi's index.
+                    try
                     {
-                        Log.Warning("Whisper ONNX models not found at {Dir}. Run the model downloader.", modelDir);
-                        return;
+                        options.AppendExecutionProvider_DML(gpu.Index);
+                    }
+                    catch (NotSupportedException ex)
+                    {
+                        Log.Warning(ex, "DirectML provider unavailable; Whisper will not use GPU");
                     }
 
                     // Load both halves of the model.

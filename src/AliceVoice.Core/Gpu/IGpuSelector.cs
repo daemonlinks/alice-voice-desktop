@@ -1,8 +1,6 @@
 namespace AliceVoice.Core.Gpu;
 
-/// <summary>
-/// Describes a GPU available for inference.
-/// </summary>
+/// <summary>A physical NVIDIA GPU as reported by nvidia-smi (PCI bus order).</summary>
 public sealed record GpuInfo(
     int Index,
     string Name,
@@ -10,18 +8,20 @@ public sealed record GpuInfo(
     long UsedMemoryMiB,
     long FreeMemoryMiB)
 {
+    /// <summary>Enough free VRAM for faster-whisper large-v3 (int8) plus headroom.</summary>
     public bool IsUsable => FreeMemoryMiB > 2048;
 }
 
 /// <summary>
-/// Selects which GPU inference workloads use. The farm render GPU (index 0)
-/// is kept for rendering; voice inference is pinned to the free GPU (index 1).
+/// Chooses which GPU runs voice inference. GPU 0 is the render-farm GPU and is
+/// NEVER selected — if no other GPU is usable the answer is "none" (callers
+/// fall back to CPU) rather than GPU 0.
 /// </summary>
 public interface IGpuSelector
 {
-    /// <summary>The GPU voice inference should run on.</summary>
-    GpuInfo PreferredInferenceGpu { get; }
+    /// <summary>The GPU voice inference should use, or null = use the CPU.</summary>
+    GpuInfo? PreferredInferenceGpu { get; }
 
-    /// <summary>Enumerate all GPUs on the machine.</summary>
+    /// <summary>All detected GPUs.</summary>
     IReadOnlyList<GpuInfo> Enumerate();
 }

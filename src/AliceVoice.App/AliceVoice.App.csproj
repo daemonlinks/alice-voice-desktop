@@ -40,6 +40,14 @@
     <Manifest Include="$(ApplicationManifest)" />
   </ItemGroup>
 
+  <!-- Helper scripts ship next to the exe (scripts\) so STT/tools work from
+       any launch location, not only from inside the repo. -->
+  <ItemGroup>
+    <None Include="..\..\scripts\*.py" Link="scripts\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
   <ItemGroup>
     <None Update="app.manifest">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
