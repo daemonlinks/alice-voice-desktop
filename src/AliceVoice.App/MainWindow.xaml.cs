@@ -24,6 +24,7 @@ public sealed partial class MainWindow : Window
     private readonly IVoiceBackendManager _voice;
     private readonly IMicrophoneCapture _mic;
     private readonly ITtsPlayback _tts;
+    private readonly SoulStore _soulStore;
     private readonly IFleetChat _chat;
     private readonly IVoiceProviderManager _voiceProvider;
 
@@ -86,6 +87,7 @@ public sealed partial class MainWindow : Window
         _tts = App.Services.GetRequiredService<ITtsPlayback>();
         _chat = App.Services.GetRequiredService<IFleetChat>();
         _voiceProvider = App.Services.GetRequiredService<IVoiceProviderManager>();
+        _soulStore = App.Services.GetRequiredService<SoulStore>();
 
         _voice.EventReceived += OnVoiceEvent;
         _mic.AudioFrameCaptured += OnMicFrame;
@@ -467,25 +469,39 @@ public sealed partial class MainWindow : Window
     // ── SOUL editor ──
     private async Task LoadSoulAsync()
     {
+        SoulStatus.Foreground = Res("AppTextDim");
         try
         {
-            var path = @"C:\Users\AHC.DAEMONLINKS\AppData\Local\hermes\profiles\alice_voice\SOUL.md";
-            if (File.Exists(path)) SoulTextarea.Text = await File.ReadAllTextAsync(path);
-            SoulStatus.Text = "Loaded";
+            var doc = await _soulStore.LoadAsync();
+            SoulTextarea.Text = doc.Text;
+            SoulStatus.Text = doc.IsLocal
+                ? $"Editing Alice LOCAL SOUL ({doc.TargetPath})"
+                : doc.SourcePath is null
+                    ? $"No SOUL yet — Save creates {doc.TargetPath}"
+                    : $"Pre-filled from read-only {doc.SourcePath} — Save writes a new Alice LOCAL SOUL ({doc.TargetPath}); the original is never changed";
         }
         catch (Exception ex) { SoulStatus.Text = $"Load failed: {ex.Message}"; }
     }
 
     private async void SoulSave_Click(object sender, RoutedEventArgs e)
     {
+        SoulSaveBtn.IsEnabled = false;
         try
         {
-            var path = @"C:\Users\AHC.DAEMONLINKS\AppData\Local\hermes\profiles\alice_voice\SOUL.md";
-            await File.WriteAllTextAsync(path, SoulTextarea.Text);
-            SoulStatus.Text = "SOUL saved to alice_voice profile — applies on next reply";
+            var result = await _soulStore.SaveAsync(SoulTextarea.Text);
+            if (_voice.Get(VoiceBackendKind.AliceLocal) is AliceLocalBackend local) await local.ReloadSoulAsync();
+            SoulStatus.Text = result.BackupPath is null
+                ? $"Saved {result.Path} — applies on the next reply"
+                : $"Saved (backup: {Path.GetFileName(result.BackupPath)}) — applies on the next reply";
             SoulStatus.Foreground = Res("AppGreen");
+            AddLog($"SOUL saved to {result.Path}" + (result.BackupPath is null ? "" : $", backup {result.BackupPath}"));
         }
-        catch (Exception ex) { SoulStatus.Text = $"Save failed: {ex.Message}"; }
+        catch (Exception ex)
+        {
+            SoulStatus.Text = $"Save failed: {ex.Message}";
+            SoulStatus.Foreground = Res("AppRed");
+        }
+        finally { SoulSaveBtn.IsEnabled = true; }
     }
 
     private void SoulClose_Click(object sender, RoutedEventArgs e) => SetMode(_lastNonSoulMode);

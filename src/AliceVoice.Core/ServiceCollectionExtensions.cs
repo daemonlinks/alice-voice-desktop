@@ -23,6 +23,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IVoiceBackendManager>(sp => new VoiceBackendManager(
             sp.GetServices<IVoiceBackend>(), sp.GetRequiredService<ISttClient>(), opts));
         services.AddSingleton<IVoiceProviderManager, VoiceProviderManager>();
+        services.AddSingleton(_ => new SoulStore(opts));
         services.AddSingleton<IFleetChat>(_ => new HermesApiFleetChat(opts.ResolvedHermesApiUrl));
         return services;
     }
