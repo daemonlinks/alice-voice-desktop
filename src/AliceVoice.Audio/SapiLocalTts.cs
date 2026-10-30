@@ -71,14 +71,19 @@ public sealed class SapiLocalTts : ILocalTts, IDisposable
         }
     }
 
+    private volatile bool _disposed;
+
     public void Stop()
     {
+        if (_disposed) return; // app shutdown may call Stop after the container disposed us
         try { _synth.SpeakAsyncCancelAll(); } catch (Exception ex) { Log.Warning(ex, "SAPI stop failed"); }
     }
 
     public void Dispose()
     {
+        if (_disposed) return;
         Stop();
+        _disposed = true;
         _synth.Dispose();
         _gate.Dispose();
     }

@@ -15,7 +15,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
-    <PublishProfile>win-$(Platform).pubxml</PublishProfile>
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
@@ -26,13 +25,11 @@
     <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
     <PackageReference Include="Serilog.Sinks.EventLog" Version="4.0.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\AliceVoice.Core\AliceVoice.Core.csproj" />
-    <ProjectReference Include="..\AliceVoice.Inference\AliceVoice.Inference.csproj" />
     <ProjectReference Include="..\AliceVoice.Audio\AliceVoice.Audio.csproj" />
   </ItemGroup>
 
