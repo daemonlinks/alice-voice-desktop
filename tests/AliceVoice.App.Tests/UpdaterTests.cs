@@ -1,5 +1,6 @@
 using System.Net;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using AliceVoice.Core.Updates;
 using Xunit;
@@ -10,6 +11,9 @@ public sealed class UpdaterTests : IDisposable
 {
     private const string ManifestUrl = "https://example.test/version.json";
     private const string DownloadUrl = "https://example.test/AliceVoice.App.msix";
+    private const string SignatureUrl = ManifestUrl + ".p7s";
+    private static readonly X509Certificate2 Root = TestPki.CreateRoot("AliceVoice Updater Test Root");
+    private static readonly X509Certificate2 Signer = TestPki.CreateLeaf(Root, "AliceVoice Updater Test Signer");
     private static readonly byte[] Payload = Encoding.UTF8.GetBytes("pretend installer bytes");
     private static readonly string PayloadSha = Convert.ToHexStringLower(SHA256.HashData(Payload));
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "av_upd_" + Guid.NewGuid().ToString("N"));
@@ -17,21 +21,33 @@ public sealed class UpdaterTests : IDisposable
 
     public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
 
-    private sealed class Handler(string manifestJson, byte[] payload) : HttpMessageHandler
+    private sealed class Handler(byte[] manifest, byte[]? signature, byte[] payload) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage r, CancellationToken ct)
         {
-            var body = r.RequestUri!.ToString() == ManifestUrl
-                ? new ByteArrayContent(Encoding.UTF8.GetBytes(manifestJson))
-                : new ByteArrayContent(payload);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = body });
+            var uri = r.RequestUri!.ToString();
+            if (uri == SignatureUrl && signature is null)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+            var body = uri == ManifestUrl ? manifest : uri == SignatureUrl ? signature! : payload;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(body) });
         }
     }
 
-    private HttpAppUpdater Updater(string version = "1.2.3", string? sha = null, string url = DownloadUrl, byte[]? payload = null, string current = "0.1.0")
+    public enum Sig { Valid, None, OverDifferentBytes, WrongIssuer }
+
+    private HttpAppUpdater Updater(string version = "1.2.3", string? sha = null, string url = DownloadUrl, byte[]? payload = null,
+        string current = "0.1.0", Sig sig = Sig.Valid)
     {
-        var json = $$"""{"version":"{{version}}","downloadUrl":"{{url}}","sha256":"{{sha ?? PayloadSha}}"}""";
-        return new HttpAppUpdater(ManifestUrl, _dir, new Handler(json, payload ?? Payload), current, p => _launched.Add(p));
+        var json = Encoding.UTF8.GetBytes($$"""{"version":"{{version}}","downloadUrl":"{{url}}","sha256":"{{sha ?? PayloadSha}}"}""");
+        byte[]? signature = sig switch
+        {
+            Sig.None => null,
+            Sig.OverDifferentBytes => UpdateSigner.SignDetached(Encoding.UTF8.GetBytes("""{"version":"0.0.1"}"""), Signer),
+            Sig.WrongIssuer => UpdateSigner.SignDetached(json, TestPki.CreateLeaf(TestPki.CreateRoot("Attacker Root"), "AliceVoice Updater Test Signer")),
+            _ => UpdateSigner.SignDetached(json, Signer),
+        };
+        return new HttpAppUpdater(ManifestUrl, _dir, new Handler(json, signature, payload ?? Payload), current, p => _launched.Add(p),
+            TestPki.Verifier(Root));
     }
 
     [Theory]
@@ -58,6 +74,21 @@ public sealed class UpdaterTests : IDisposable
     [InlineData("")]
     [InlineData("abc123")]
     public async Task ReleaseWithoutValidHashIsNotOffered(string sha) => Assert.Null(await Updater(sha: sha).CheckForUpdateAsync());
+
+    [Theory]
+    [InlineData(Sig.None)]
+    [InlineData(Sig.OverDifferentBytes)]
+    [InlineData(Sig.WrongIssuer)]
+    public async Task UnsignedOrBadlySignedManifestIsNotOffered(Sig sig) =>
+        Assert.Null(await Updater(sig: sig).CheckForUpdateAsync());
+
+    [Fact]
+    public async Task ProductionVerifierRejectsTestSignedManifest()
+    {
+        var json = Encoding.UTF8.GetBytes($$"""{"version":"1.2.3","downloadUrl":"{{DownloadUrl}}","sha256":"{{PayloadSha}}"}""");
+        var u = new HttpAppUpdater(ManifestUrl, _dir, new Handler(json, UpdateSigner.SignDetached(json, Signer), Payload), "0.1.0", p => _launched.Add(p));
+        Assert.Null(await u.CheckForUpdateAsync());
+    }
 
     [Fact]
     public async Task NonHttpsReleaseIsNotOffered() => Assert.Null(await Updater(url: "http://example.test/x.msix").CheckForUpdateAsync());
