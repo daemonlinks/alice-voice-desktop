@@ -56,8 +56,8 @@ public sealed class VoiceProviderManager : IVoiceProviderManager
             Log.Warning("No voice provider registered for {Kind}", profile.Provider);
             return;
         }
-        Log.Information("Speaking via {Provider} (voice: {Voice}): {Text}",
-            provider.DisplayName, string.IsNullOrEmpty(profile.Voice) ? "default" : profile.Voice, text);
+        Log.Information("Speaking via {Provider} (voice: {Voice}): {Chars} chars",
+            provider.DisplayName, string.IsNullOrEmpty(profile.Voice) ? "default" : profile.Voice, text.Length);
         await provider.SpeakAsync(text, profile.Voice, ct);
     }
 }

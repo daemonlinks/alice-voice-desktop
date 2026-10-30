@@ -4,15 +4,18 @@ using Serilog;
 namespace AliceVoice.Audio;
 
 /// <summary>
-/// Low-latency microphone capture via WASAPI (NAudio). Captures the default
-/// input device, resamples to 16 kHz mono, and raises float buffers ready for
-/// Whisper transcription.
+/// Microphone capture via NAudio WaveIn (event callback) on the Windows
+/// default input device (WAVE_MAPPER, device -1 — the old code pinned device
+/// 0, which is not necessarily the default). Captures 16 kHz mono directly so
+/// Windows does the resampling properly (the old 48k→16k decimation had no
+/// low-pass filter and aliased). Raises float frames in -1..1.
 /// </summary>
 public sealed class WasapiMicrophoneCapture : IMicrophoneCapture
 {
+    public const int SampleRate = 16000;
     public event Action<float[]>? AudioFrameCaptured;
 
-    private WaveInEvent? _waveIn;
+    private WaveIn? _waveIn;
     private readonly object _lock = new();
 
     public Task StartAsync(CancellationToken ct = default)
@@ -21,16 +24,26 @@ public sealed class WasapiMicrophoneCapture : IMicrophoneCapture
         {
             if (_waveIn is not null) return Task.CompletedTask;
 
-            _waveIn = new WaveInEvent
+            var waveIn = new WaveIn
             {
-                DeviceNumber = 0,
-                WaveFormat = new WaveFormat(48000, 16, 1),
+                DeviceNumber = -1,
+                WaveFormat = new WaveFormat(SampleRate, 16, 1),
                 BufferMilliseconds = 50
             };
-            _waveIn.DataAvailable += OnDataAvailable;
-            _waveIn.RecordingStopped += (_, _) => Log.Information("WASAPI capture stopped");
-            _waveIn.StartRecording();
-            Log.Information("WASAPI microphone capture started (48kHz -> 16kHz mono)");
+            waveIn.DataAvailable += OnDataAvailable;
+            waveIn.RecordingStopped += (_, e) =>
+            {
+                if (e.Exception is not null) Log.Warning(e.Exception, "Microphone capture stopped with an error");
+            };
+            try { waveIn.StartRecording(); }
+            catch
+            {
+                waveIn.DataAvailable -= OnDataAvailable;
+                waveIn.Dispose();
+                throw;
+            }
+            _waveIn = waveIn;
+            Log.Information("Microphone capture started (default device, 16 kHz mono)");
         }
         return Task.CompletedTask;
     }
@@ -44,27 +57,18 @@ public sealed class WasapiMicrophoneCapture : IMicrophoneCapture
             _waveIn.DataAvailable -= OnDataAvailable;
             _waveIn.Dispose();
             _waveIn = null;
-            Log.Information("WASAPI microphone capture stopped");
+            Log.Information("Microphone capture stopped");
         }
         return Task.CompletedTask;
     }
 
     private void OnDataAvailable(object? sender, WaveInEventArgs e)
     {
-        // Convert 16-bit PCM bytes to float, resample 48k -> 16k (decimate by 3).
         var samples = e.BytesRecorded / 2;
-        var pcm = new short[samples];
-        Buffer.BlockCopy(e.Buffer, 0, pcm, 0, e.BytesRecorded);
-
         var floats = new float[samples];
         for (int i = 0; i < samples; i++)
-            floats[i] = pcm[i] / 32768f;
-
-        var target = new float[samples / 3];
-        for (int i = 0; i < target.Length; i++)
-            target[i] = floats[i * 3];
-
-        AudioFrameCaptured?.Invoke(target);
+            floats[i] = BitConverter.ToInt16(e.Buffer, i * 2) / 32768f;
+        AudioFrameCaptured?.Invoke(floats);
     }
 
     public async ValueTask DisposeAsync()

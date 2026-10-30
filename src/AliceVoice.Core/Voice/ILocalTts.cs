@@ -1,14 +1,17 @@
 namespace AliceVoice.Core.Voice;
 
 /// <summary>
-/// Instant local TTS (Windows SAPI). No network, no relay — magnitude faster
-/// than streaming TTS from the relay. Used by the local Ollama backend state.
-/// Implemented in the Audio project (SapiLocalTts).
+/// Instant local TTS (Windows SAPI). No network. Implemented in the Audio
+/// project (SapiLocalTts). Speech runs asynchronously off the caller's
+/// thread, so the UI never blocks while Alice is talking.
 /// </summary>
 public interface ILocalTts
 {
-    /// <summary>Speak text synchronously through the default SAPI voice.</summary>
-    void Speak(string text);
+    /// <summary>Speak text; completes when speech finishes. Cancelling stops speech.</summary>
+    Task SpeakAsync(string text, string? voiceName = null, CancellationToken ct = default);
+
+    /// <summary>Installed, enabled voice names.</summary>
+    IReadOnlyList<string> AvailableVoices();
 
     /// <summary>Stop any in-progress speech.</summary>
     void Stop();

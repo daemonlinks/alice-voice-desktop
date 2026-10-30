@@ -1,7 +1,7 @@
 namespace AliceVoice.Audio;
 
 /// <summary>
-/// Low-latency microphone capture via WASAPI. Produces 16 kHz mono PCM
+/// Low-latency microphone capture via NAudio WaveIn on the default device. Produces 16 kHz mono PCM
 /// float buffers ready for Whisper transcription.
 /// </summary>
 public interface IMicrophoneCapture : IAsyncDisposable
