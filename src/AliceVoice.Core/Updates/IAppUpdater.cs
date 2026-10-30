@@ -15,7 +15,9 @@ public sealed record ReleaseInfo(
 public sealed record StagedUpdate(string Path, string Version, string Sha256);
 
 /// <summary>
-/// Checks for and applies application updates. Nothing is ever launched
+/// Checks for and applies application updates. Only a manifest with a valid
+/// detached CMS signature (Code Signing, pinned daemonlinks-AHC-CA root) is
+/// trusted, and nothing is ever launched
 /// unless its SHA-256 matches the manifest — checked after download and again
 /// immediately before launch. The app never downloads or runs an update by
 /// itself; it only reports that one is available.

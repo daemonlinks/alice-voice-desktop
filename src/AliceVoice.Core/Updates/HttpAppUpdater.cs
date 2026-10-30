@@ -1,4 +1,4 @@
-using System.Net.Http.Json;
+using System.Text.Json;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
@@ -11,8 +11,12 @@ namespace AliceVoice.Core.Updates;
 /// compares it with the installed version. A release is only offered if the
 /// manifest carries a valid SHA-256 and an https download URL; downloads go to
 /// a .partial file, are hashed, and are deleted on mismatch; the hash is
-/// checked again right before launch. Authenticode signature checking is a
-/// follow-up (no signing certificate exists yet).
+/// checked again right before launch. A newer release is only offered if the
+/// manifest bytes carry a valid detached CMS signature (fetched from
+/// <c>&lt;manifest url&gt;.p7s</c>) by a Code Signing certificate chaining to the
+/// pinned daemonlinks-AHC-CA root; because the signed manifest holds the
+/// package SHA-256, the package is authenticated through the hash.
+/// Unsigned or invalidly signed manifests are rejected.
 /// </summary>
 public sealed partial class HttpAppUpdater : IAppUpdater
 {
@@ -20,11 +24,18 @@ public sealed partial class HttpAppUpdater : IAppUpdater
     private readonly string _manifestUrl;
     private readonly string _downloadDir;
     private readonly Action<string> _launch;
+    private readonly string _signatureUrl;
+    private readonly UpdateSignatureVerifier _verifier;
+
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public HttpAppUpdater(string manifestUrl, string? downloadDir = null, HttpMessageHandler? handler = null,
-        string? currentVersion = null, Action<string>? launch = null)
+        string? currentVersion = null, Action<string>? launch = null,
+        UpdateSignatureVerifier? verifier = null, string? signatureUrl = null)
     {
         _manifestUrl = manifestUrl;
+        _signatureUrl = signatureUrl ?? SignatureUrlFor(manifestUrl);
+        _verifier = verifier ?? UpdateSignatureVerifier.CreateDefault();
         _downloadDir = downloadDir ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "AliceVoice", "updates");
@@ -36,6 +47,15 @@ public sealed partial class HttpAppUpdater : IAppUpdater
             FileName = path,
             UseShellExecute = true
         }));
+    }
+
+    /// <summary>Detached signature location for a manifest: the manifest URL with ".p7s" appended to its path.</summary>
+    public static string SignatureUrlFor(string manifestUrl)
+    {
+        if (!Uri.TryCreate(manifestUrl, UriKind.Absolute, out var u)) return manifestUrl + ".p7s";
+        var b = new UriBuilder(u);
+        b.Path += ".p7s";
+        return b.Uri.ToString();
     }
 
     /// <summary>App version (from Directory.Build.props), read from the entry assembly.</summary>
@@ -70,10 +90,14 @@ public sealed partial class HttpAppUpdater : IAppUpdater
     {
         try
         {
-            using var resp = await _http.GetAsync(_manifestUrl, ct);
-            resp.EnsureSuccessStatusCode();
+            byte[] manifestBytes;
+            using (var resp = await _http.GetAsync(_manifestUrl, ct))
+            {
+                resp.EnsureSuccessStatusCode();
+                manifestBytes = await resp.Content.ReadAsByteArrayAsync(ct);
+            }
 
-            var manifest = await resp.Content.ReadFromJsonAsync<UpdateManifest>(ct);
+            var manifest = JsonSerializer.Deserialize<UpdateManifest>(manifestBytes, JsonOptions);
             if (manifest is null) return null;
 
             var current = ParseVersion(CurrentVersion) ?? new Version(0, 0, 0);
@@ -99,6 +123,16 @@ public sealed partial class HttpAppUpdater : IAppUpdater
                 return null;
             }
 
+            var signature = await TryGetSignatureAsync(ct);
+            var check = _verifier.Verify(manifestBytes, signature);
+            if (!check.IsValid)
+            {
+                Log.Warning("Update {Version} ignored: manifest signature rejected ({Reason})", manifest.Version, check.Reason);
+                return null;
+            }
+            Log.Information("Update manifest {Version} signature {Reason}; signer {Subject} ({Thumbprint})",
+                manifest.Version, check.Reason, check.SignerSubject, check.SignerThumbprint);
+
             Log.Information("Update available: {Latest} (installed {Current})", manifest.Version, CurrentVersion);
             return new ReleaseInfo(manifest.Version, manifest.DownloadUrl, manifest.Sha256!.ToLowerInvariant(),
                 manifest.Notes, manifest.PublishedAt);
@@ -108,6 +142,17 @@ public sealed partial class HttpAppUpdater : IAppUpdater
             Log.Warning(ex, "Update check failed against {Url}", _manifestUrl);
             return null;
         }
+    }
+
+    private async Task<byte[]?> TryGetSignatureAsync(CancellationToken ct)
+    {
+        using var resp = await _http.GetAsync(_signatureUrl, ct);
+        if (!resp.IsSuccessStatusCode)
+        {
+            Log.Warning("No update manifest signature at {Url} (HTTP {Status})", _signatureUrl, (int)resp.StatusCode);
+            return null;
+        }
+        return await resp.Content.ReadAsByteArrayAsync(ct);
     }
 
     public async Task<StagedUpdate> DownloadUpdateAsync(ReleaseInfo release, CancellationToken ct = default)

@@ -93,9 +93,66 @@ On startup the app reads `version.json` (this repo, raw on GitHub). A release
 is only offered when it has a higher version, an `https` `downloadUrl` and a
 64-hex `sha256`. Downloads are hash-verified (deleted on mismatch) and
 re-verified immediately before launch; the app currently only shows
-"Update available" and never runs a download automatically. Authenticode
-signature checking is a planned follow-up. The app version comes from
-`Directory.Build.props`.
+"Update available" and never runs a download automatically. The app version
+comes from `Directory.Build.props`.
+
+### Update signing
+
+`version.json` must be accompanied by `version.json.p7s`: a detached CMS/PKCS#7
+signature (SHA-256) over the exact bytes of `version.json`. The updater fetches
+it from the manifest URL with `.p7s` appended and only offers a newer release
+when all of these hold (`src/AliceVoice.Core/Updates/UpdateSignature.cs`):
+
+- the signature decodes, has exactly one signer, and is valid for the manifest bytes;
+- the signer certificate has the Code Signing EKU (1.3.6.1.5.5.7.3.3) and digitalSignature key usage;
+- it chains to the embedded **daemonlinks-AHC-CA** root, pinned by thumbprint
+  `7ED67FFF3DF7360AA24E4DE1C01B300BFEBAFF0B` (custom root trust only; the Windows
+  root store is not consulted, no certificate downloads);
+- the signer certificate is within its validity period.
+
+Unsigned, tampered, wrongly issued, or non-code-signing signatures mean the
+update is not offered (logged as a warning). Because the signed manifest holds
+the package `sha256`, the downloaded package is authenticated through the
+existing hash checks (which, together with the `https` requirement, stay in place).
+
+**Revocation (offline-tolerant).** Revocation is checked online with a 10 s
+timeout. The CA publishes its CRL only via LDAP (`CN=CDP` in AD), so outside
+the domain the status is usually *unknown*. `RevocationStatusUnknown` and
+`OfflineRevocation` are tolerated and logged ("revocation not checked");
+a certificate that is actually **revoked**, or any other chain error, is
+rejected. Expired signer certificates are rejected, so re-sign `version.json`
+with the renewed certificate before the old one expires.
+
+### Releasing (signing `version.json`)
+
+The signing certificate comes from the **AliceVoice Code Signing** template on
+`daemonlinks-AHC-CA` (RSA 3072, 2 years, private key non-exportable, enrolment
+limited to `DAEMONLINKS\ahc`). The key never leaves the Windows certificate
+store; the tool only asks the store to sign.
+
+1. One-time / on renewal, as `daemonlinks\ahc` on a domain machine:
+   ```powershell
+   Get-Certificate -Template AliceVoiceCodeSigning -CertStoreLocation Cert:\CurrentUser\My
+   Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
+     ? Issuer -like 'CN=daemonlinks-AHC-CA*' | fl Thumbprint, Subject, NotAfter
+   ```
+   (If Credential Manager holds a saved domain credential for `AHC-CORE`, Windows
+   uses it for the enrolment and the certificate is issued to that account
+   instead; remove it for the enrolment.)
+2. Build and publish the package, then put its version, `https` URL and
+   SHA-256 (`(Get-FileHash <package>).Hash.ToLower()`) in `version.json`.
+3. Sign and verify:
+   ```powershell
+   dotnet run --project tools/AliceVoice.ReleaseSigner -c Release -- sign --thumbprint <THUMBPRINT> --file version.json
+   dotnet run --project tools/AliceVoice.ReleaseSigner -c Release -- verify --file version.json
+   ```
+   `sign` writes `version.json.p7s` and immediately verifies it against the
+   pinned root (exit code 0 = valid). The signature covers the LF form of
+   `version.json` (what git stores and `raw.githubusercontent.com` serves);
+   `sign` converts a CRLF working copy to LF first, and `verify` checks the
+   LF form.
+4. Commit `version.json` and `version.json.p7s` together (via PR). Any later
+   content edit to `version.json` invalidates the signature; re-run step 3.
 
 ## Build
 
