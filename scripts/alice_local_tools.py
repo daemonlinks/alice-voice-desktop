@@ -15,15 +15,18 @@ import sys
 import urllib.request
 
 HONCHO_BASE = os.environ.get("HONCHO_BASE", "http://localhost:8001")
-HONCHO_API_KEY = os.environ.get("HONCHO_API_KEY", "***-honcho-selfhost")
+# Local self-hosted Honcho runs with AUTH_USE_AUTH=false, so no key is needed.
+# HONCHO_API_KEY is optional: only sent if set (env or the AliceVoice .env),
+# e.g. if auth is ever enabled on the server. Never hardcode a key here.
+HONCHO_API_KEY = os.environ.get("HONCHO_API_KEY", "")
 HONCHO_WORKSPACE = os.environ.get("HONCHO_WORKSPACE", "alice_local")
 HONCHO_PEER = os.environ.get("HONCHO_PEER", "AHC")
 HONCHO_AI_PEER = os.environ.get("HONCHO_AI_PEER", "alice_local")
 
 
 def _load_env() -> None:
-    """Load TAVILY_API_KEY (and any other keys) from the AliceVoice .env file."""
-    global HONCHO_API_KEY
+    """Load TAVILY_API_KEY, HONCHO_BASE and optional HONCHO_API_KEY from the AliceVoice .env file."""
+    global HONCHO_API_KEY, HONCHO_BASE
     env_path = os.environ.get("ALICEVOICE_ENV", r"C:\ProgramData\AliceVoice\.env")
     if not os.path.exists(env_path):
         return
@@ -39,9 +42,17 @@ def _load_env() -> None:
             os.environ["TAVILY_API_KEY"] = v
         elif k == "HONCHO_API_KEY" and not os.environ.get("HONCHO_API_KEY"):
             HONCHO_API_KEY = v
+        elif k == "HONCHO_BASE" and not os.environ.get("HONCHO_BASE"):
+            HONCHO_BASE = v.rstrip("/")
 
 
 _load_env()
+
+
+def _auth(req: urllib.request.Request) -> None:
+    """Attach x-api-key only when one is configured (local Honcho needs none)."""
+    if HONCHO_API_KEY:
+        req.add_header("x-api-key", HONCHO_API_KEY)
 
 
 def _raw_query(query: str, limit: int, distance: float) -> list:
@@ -54,7 +65,7 @@ def _raw_query(query: str, limit: int, distance: float) -> list:
     }).encode()
     req = urllib.request.Request(url, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
-    req.add_header("x-api-key", HONCHO_API_KEY)
+    _auth(req)
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read())
 
@@ -94,7 +105,7 @@ def honcho_save(args: dict) -> dict:
         }).encode()
         req = urllib.request.Request(url, data=body, method="POST")
         req.add_header("Content-Type", "application/json")
-        req.add_header("x-api-key", HONCHO_API_KEY)
+        _auth(req)
         with urllib.request.urlopen(req, timeout=30) as resp:
             return {"saved": True, "status": resp.status}
     except Exception as e:
@@ -118,7 +129,7 @@ def honcho_forget(args: dict) -> dict:
                 continue
             url = f"{HONCHO_BASE}/v3/workspaces/{HONCHO_WORKSPACE}/conclusions/{cid}"
             req = urllib.request.Request(url, method="DELETE")
-            req.add_header("x-api-key", HONCHO_API_KEY)
+            _auth(req)
             with urllib.request.urlopen(req, timeout=30):
                 deleted += 1
         return {"deleted": deleted}
