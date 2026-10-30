@@ -38,7 +38,7 @@
                         </StackPanel>
                     </StackPanel>
                     <Border Background="{StaticResource AppAccent}" CornerRadius="10" Padding="6,2" Margin="4,0,0,0" VerticalAlignment="Center">
-                        <TextBlock x:Name="BrandBadge" Text="v2.1 · yours" Foreground="Black" FontSize="10" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="BrandBadge" Text="v?.?.? · yours" Foreground="Black" FontSize="10" FontWeight="SemiBold"/>
                     </Border>
                 </StackPanel>
 
@@ -111,7 +111,7 @@
                         <TextBlock x:Name="PStageStt" Text="⚫ STT" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
                         <TextBlock x:Name="PStageLlm" Text="⚫ LLM" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
                         <TextBlock x:Name="PStageTts" Text="⚫ TTS" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
-                        <TextBlock x:Name="PStageWs" Text="⚫ WS" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="PStageWs" Text="⚫ API" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
                     </StackPanel>
                     <TextBlock x:Name="PStageErr" Foreground="{StaticResource AppRed}" FontSize="11" MaxWidth="200" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
                 </StackPanel>
@@ -121,7 +121,15 @@
         <!-- ══ Error Banner ══ -->
         <Border x:Name="ErrorBanner" Grid.Row="2" Background="#1A0A0A" BorderBrush="{StaticResource AppRed}" BorderThickness="1"
                 Margin="16,6,16,0" Padding="10,6" Visibility="Collapsed" VerticalAlignment="Top">
-            <TextBlock x:Name="ErrorBannerText" Foreground="{StaticResource AppRed}" FontSize="12" TextWrapping="Wrap"/>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="ErrorBannerText" Foreground="{StaticResource AppRed}" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                <Button x:Name="ErrorDismissBtn" Grid.Column="1" Content="✕" Style="{StaticResource ChipButton}" Margin="8,0,0,0"
+                        Click="ErrorDismiss_Click" ToolTipService.ToolTip="Dismiss"/>
+            </Grid>
         </Border>
 
         <!-- ══ Transcript ══ -->
@@ -208,9 +216,9 @@
                     <Button x:Name="HelpToggle" Content="▸  Keywords &amp; Tools" Style="{StaticResource ChipButton}" HorizontalAlignment="Left" Click="HelpToggle_Click"/>
                     <StackPanel x:Name="HelpArea" Visibility="Collapsed" Background="#1A1A22" Padding="10,8" Spacing="4">
                         <TextBlock Text="Trigger phrases" Foreground="{StaticResource AppAccent}" FontSize="11" FontWeight="SemiBold"/>
-                        <TextBlock Text="Remember that… · Remember I… · What do you know about me? · Forget that… · Remove that… · Delete that… · I don't like that anymore · What time is it? · Search for…" Foreground="{StaticResource AppTextDim}" FontSize="11" TextWrapping="Wrap"/>
+                        <TextBlock Text="Remember that… · Remember I… · What do you know about me? · Forget that… · Remove that… · Delete that… · I don't like that anymore · Search for…" Foreground="{StaticResource AppTextDim}" FontSize="11" TextWrapping="Wrap"/>
                         <TextBlock Text="Tools" Foreground="{StaticResource AppAccent}" FontSize="11" FontWeight="SemiBold"/>
-                        <TextBlock Text="honcho_search · honcho_save · honcho_forget · time · search" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
+                        <TextBlock Text="honcho_search · honcho_save · honcho_forget · search (Alice LOCAL)" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
                     </StackPanel>
 
                     <Button x:Name="SettingsToggle" Content="▸  Settings" Style="{StaticResource ChipButton}" HorizontalAlignment="Left" Click="SettingsToggle_Click"/>
@@ -239,7 +247,7 @@
                             <TextBlock Text="E2E:" Foreground="{StaticResource AppTextDim}" FontSize="12"/><TextBlock x:Name="MTotal" Text="—" Foreground="{StaticResource AppText}" FontSize="12"/>
                             <TextBlock Text="STT:" Foreground="{StaticResource AppTextDim}" FontSize="12"/><TextBlock x:Name="MStt" Text="—" Foreground="{StaticResource AppGreen}" FontSize="12"/>
                             <TextBlock Text="LLM:" Foreground="{StaticResource AppTextDim}" FontSize="12"/><TextBlock x:Name="MLlm" Text="—" Foreground="{StaticResource AppYellow}" FontSize="12"/>
-                            <TextBlock Text="Gap:" Foreground="{StaticResource AppTextDim}" FontSize="12"/><TextBlock x:Name="MGap" Text="—" Foreground="#F97316" FontSize="12"/>
+                            <TextBlock x:Name="MGapLabel" Text="TTFT:" Foreground="{StaticResource AppTextDim}" FontSize="12"/><TextBlock x:Name="MGap" Text="—" Foreground="#F97316" FontSize="12"/>
                             <TextBlock Text="TTS:" Foreground="{StaticResource AppTextDim}" FontSize="12"/><TextBlock x:Name="MTts" Text="—" Foreground="{StaticResource AppBlue}" FontSize="12"/>
                         </StackPanel>
                         <TextBlock x:Name="MetricsSummary" Text="waiting for data" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
@@ -255,7 +263,7 @@
                             <Button x:Name="ProfFullBtn" Content="Full" Style="{StaticResource ChipButton}" Click="ProfFull_Click"/>
                         </StackPanel>
                         <TextBlock x:Name="ProfHint" Text="2–3 sentences · conversational default · max 320 tokens" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
-                        <TextBlock Text="Speech engine (local only)" Foreground="{StaticResource AppText}" FontSize="12"/>
+                        <TextBlock Text="Speech engine (sets the voice provider for this agent)" Foreground="{StaticResource AppText}" FontSize="12"/>
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <Button x:Name="TtsAlltalkBtn" Content="AllTalk (local)" Style="{StaticResource ChipButtonActive}" Click="TtsAlltalk_Click"/>
                             <Button x:Name="TtsPiperBtn" Content="Piper (local)" Style="{StaticResource ChipButton}" Click="TtsPiper_Click"/>
@@ -272,11 +280,11 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="●" Foreground="{StaticResource AppAccent}" FontSize="8" VerticalAlignment="Center"/>
-                        <TextBlock Text="Authenticated session" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
+                        <TextBlock x:Name="FooterAuth" Text="—" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="14">
                         <TextBlock x:Name="LlmModeDisplay" Text="alice_voice" Foreground="{StaticResource AppGreen}" FontSize="11"/>
-                        <TextBlock x:Name="WsDisplay" Text="ws·off" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
+                        <TextBlock x:Name="WsDisplay" Text="api·off" Foreground="{StaticResource AppTextDim}" FontSize="11"/>
                     </StackPanel>
                 </Grid>
             </StackPanel>

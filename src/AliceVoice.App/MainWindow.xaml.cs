@@ -1,14 +1,17 @@
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.Extensions.DependencyInjection;
 using Serilog;
 using AliceVoice.Audio;
 using AliceVoice.Core.Chat;
-using AliceVoice.Core.Gpu;
+using AliceVoice.Core.Config;
+using AliceVoice.Core.Stt;
 using AliceVoice.Core.Updates;
 using AliceVoice.Core.Voice;
-using AliceVoice.Inference;
 using System.Diagnostics;
 using System.Text.Json;
 
@@ -16,8 +19,7 @@ namespace AliceVoice.App;
 
 public sealed partial class MainWindow : Window
 {
-    private readonly IGpuSelector _gpu;
-    private readonly IWhisperEngine _whisper;
+    private readonly AliceVoiceOptions _options;
     private readonly IAppUpdater _updater;
     private readonly IVoiceBackendManager _voice;
     private readonly IMicrophoneCapture _mic;
@@ -25,44 +27,59 @@ public sealed partial class MainWindow : Window
     private readonly IFleetChat _chat;
     private readonly IVoiceProviderManager _voiceProvider;
 
-    private bool _talking;
+    // ── Push-to-talk: record while held, transcribe once on release ──
+    private readonly PushToTalkGesture _ptt = new();
+    private readonly UtteranceBuffer _utterance = new(minSeconds: 0.3, maxSeconds: 120);
+    private bool _pointerDrivenClick;
+    private bool _micRunning;
+    private float _vuLevel;
+    private DispatcherQueueTimer? _vuTimer;
+
+    // ── Turn state ──
+    private CancellationTokenSource? _turnCts;
+    private int _turnId;
+    private int _streamTurnId;
+    private TextBlock? _streamText;
+    private Button? _streamRemember;
+    private readonly List<TurnTiming> _timings = new();
+
     private string _mood = "natural";
     private string _mode = "ptt";
     private string _lastNonSoulMode = "ptt";
     private string _profile = "natural";
-    private string _ttsEngine = "alltalk";
     private int _turnSeq;
     private bool _connected;
+    private bool _initializing = true;
     private bool _logOpen, _helpOpen, _settingsOpen, _metricsOpen, _tuningOpen;
     private readonly List<string> _backgroundImages = new();
     private int _bgIdx = -1;
+    private DispatcherQueueTimer? _errorTimer;
 
     // Per-fleet-member voice assignment: member name -> { provider, voice }.
     private readonly Dictionary<string, VoiceProfile> _memberVoices = new(StringComparer.OrdinalIgnoreCase);
     private static readonly string VoiceAssignmentsPath =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AliceVoice", "voice-assignments.json");
 
+    private sealed record TurnTiming(string Target, long SttMs, long LlmMs, long TtftMs, long TtsMs, long TotalMs);
+
     public MainWindow()
+    {
+        _options = App.Services.GetRequiredService<AliceVoiceOptions>();
+        try
+        {
+            InitializeComponent();
+        }
+        catch (Exception ex)
         {
             try
             {
-                InitializeComponent();
+                Directory.CreateDirectory(_options.CrashDir);
+                File.WriteAllText(Path.Combine(_options.CrashDir, "xaml_crash.txt"), ex.ToString());
             }
-            catch (Exception ex)
-            {
-                try
-                {
-                    var sb = new System.Text.StringBuilder();
-                    for (var e = ex; e != null; e = e.InnerException)
-                        sb.AppendLine(e.GetType().FullName + ": " + e.Message);
-                    System.IO.File.WriteAllText(@"C:\Users\AHC.DAEMONLINKS\AppData\Local\AliceVoice\xaml_crash.txt", ex.ToString());
-                }
-                catch { }
-                throw;
-            }
+            catch { }
+            throw;
+        }
 
-        _gpu = App.Services.GetRequiredService<IGpuSelector>();
-        _whisper = App.Services.GetRequiredService<IWhisperEngine>();
         _updater = App.Services.GetRequiredService<IAppUpdater>();
         _voice = App.Services.GetRequiredService<IVoiceBackendManager>();
         _mic = App.Services.GetRequiredService<IMicrophoneCapture>();
@@ -71,42 +88,70 @@ public sealed partial class MainWindow : Window
         _voiceProvider = App.Services.GetRequiredService<IVoiceProviderManager>();
 
         _voice.EventReceived += OnVoiceEvent;
-        _voice.AudioReceived += OnVoiceAudio;
         _mic.AudioFrameCaptured += OnMicFrame;
 
-        // Populate the agent selector: Alice LOCAL first, then fleet members.
-                        FleetSelector.Items.Add(new ComboBoxItem { Content = "Alice LOCAL", Tag = "alice_local" });
-                        foreach (var m in FleetRoster.Members)
-                                            FleetSelector.Items.Add(new ComboBoxItem { Content = m.DisplayName, Tag = m.Name });
-                                        FleetSelector.SelectedIndex = 0;
+        // Hold-to-talk needs press AND release, which Button.Click alone can't give.
+        TalkButton.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(TalkButton_PointerPressed), true);
+        TalkButton.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler(TalkButton_PointerReleased), true);
+        TalkButton.AddHandler(UIElement.PointerCanceledEvent, new PointerEventHandler(TalkButton_PointerCanceled), true);
+        TalkButton.AddHandler(UIElement.PointerCaptureLostEvent, new PointerEventHandler(TalkButton_PointerCanceled), true);
+        ToolTipService.SetToolTip(TalkButton, "Hold to talk — release to send. Tap to latch on, tap again to send.");
 
-        // Populate the voice provider selector from the registered providers.
-                foreach (var p in _voiceProvider.Providers)
-                                    VoiceProviderSelect.Items.Add(new ComboBoxItem { Content = p.DisplayName, Tag = p.Kind });
-                            }
+        // Populate the agent selector: Alice LOCAL first, then fleet members.
+        // (_initializing suppresses SelectionChanged side effects during setup.)
+        FleetSelector.Items.Add(new ComboBoxItem { Content = "Alice LOCAL", Tag = "alice_local" });
+        foreach (var m in FleetRoster.Members)
+            FleetSelector.Items.Add(new ComboBoxItem { Content = m.DisplayName, Tag = m.Name });
+        FleetSelector.SelectedIndex = 0;
+
+        foreach (var p in _voiceProvider.Providers)
+            VoiceProviderSelect.Items.Add(new ComboBoxItem { Content = p.DisplayName, Tag = p.Kind });
+
+        // Controls that have no implementation yet are disabled, with a reason.
+        ModeWakeBtn.IsEnabled = false;
+        ToolTipService.SetToolTip(ModeWakeBtn, "Wake word is not implemented yet — use PTT or Text.");
+        foreach (var s in new[] { CtxPointsSlider, CtxHonchoSlider, CtxCharsSlider })
+        {
+            s.IsEnabled = false;
+            ToolTipService.SetToolTip(s, "Not implemented yet — context injection is controlled by the agent.");
+        }
+        MGapLabel.Text = "TTFT:";
+        BrandBadge.Text = $"v{_updater.CurrentVersion} · yours";
+
+        Closed += (_, _) => OnWindowClosed();
+    }
 
     private async void RootGrid_Loaded(object sender, RoutedEventArgs e)
+    {
+        try { AppWindow.Resize(new Windows.Graphics.SizeInt32(1200, 800)); } catch { }
+        LoadBackgrounds();
+        LoadMemberVoices();
+        _initializing = false;
+        _ = LoadVoicesForSelectedProviderAsync();
+        _ = CheckForUpdatesAsync();
+        _ = WarmUpSttAsync();
+        AppendSystem("Talk to me, Master. Hold 🎤 Talk while you speak.");
+        UpdateStatusPanel();
+        await ConnectCurrentAsync();
+    }
+
+    /// <summary>Load the faster-whisper model in the background so the first utterance is fast.</summary>
+    private async Task WarmUpSttAsync()
+    {
+        try
         {
-            try
-            {
-                try { AppWindow.Resize(new Windows.Graphics.SizeInt32(1200, 800)); } catch { }
-                LoadBackgrounds();
-                LoadMemberVoices();
-                await _whisper.WarmUpAsync();
-            await _voice.SwitchToAsync(VoiceBackendKind.AliceLocal);
-                        SetConnected(true);
-                        Log.Information("Alice Voice started");
-            _ = CheckForUpdatesAsync();
-                        _ = LoadVoicesForSelectedProviderAsync();
-                        AppendSystem("Talk to me, Master.");
-                        UpdateStatusPanel();
-                        SetActivity("Ready", "Alice LOCAL · local (Ollama)");
+            PStageStt.Text = "⏳ STT";
+            await _voice.Stt.WarmUpAsync();
+            PStageStt.Text = "⚫ STT";
+            AddLog($"STT ready: {_voice.Stt.Status}");
         }
         catch (Exception ex)
         {
-            StatusText.Text = "Startup error";
-            Log.Error(ex, "Failed to initialise Alice Voice");
+            PStageStt.Text = "✖ STT";
+            AddLog($"STT unavailable: {ex.Message}");
+            Log.Warning(ex, "STT warm-up failed");
         }
+        UpdateStatusPanel();
     }
 
     // ── Background images ──
@@ -114,7 +159,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            var dir = @"C:\Users\AHC.DAEMONLINKS\ahc-the-beast\voice\Mirrored";
+            var dir = _options.ResolvedBackgroundsDir;
             if (Directory.Exists(dir))
                 _backgroundImages.AddRange(Directory.GetFiles(dir, "*.jpg").Concat(Directory.GetFiles(dir, "*.png")));
         }
@@ -123,20 +168,16 @@ public sealed partial class MainWindow : Window
     }
 
     private void SetBg(int idx)
+    {
+        if (_backgroundImages.Count == 0) return;
+        _bgIdx = ((idx % _backgroundImages.Count) + _backgroundImages.Count) % _backgroundImages.Count;
+        try
         {
-            if (_backgroundImages.Count == 0) return;
-            _bgIdx = ((idx % _backgroundImages.Count) + _backgroundImages.Count) % _backgroundImages.Count;
-            try
-            {
-                var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(_backgroundImages[_bgIdx]));
-                RootGrid.Background = new Microsoft.UI.Xaml.Media.ImageBrush
-                {
-                    ImageSource = bmp,
-                    Stretch = Microsoft.UI.Xaml.Media.Stretch.Uniform
-                };
-            }
-            catch (Exception ex) { Log.Warning(ex, "Background set failed"); }
+            var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(_backgroundImages[_bgIdx]));
+            RootGrid.Background = new ImageBrush { ImageSource = bmp, Stretch = Stretch.Uniform };
         }
+        catch (Exception ex) { Log.Warning(ex, "Background set failed"); }
+    }
 
     private void PrevBg_Click(object sender, RoutedEventArgs e) => SetBg(_bgIdx - 1);
     private void NextBg_Click(object sender, RoutedEventArgs e) => SetBg(_bgIdx + 1);
@@ -150,50 +191,80 @@ public sealed partial class MainWindow : Window
     // ── Connect / Disconnect ──
     private async void Connect_Click(object sender, RoutedEventArgs e)
     {
+        if (_connected) { SetConnected(false); return; }
+        await ConnectCurrentAsync(force: true);
+    }
+
+    /// <summary>Connect the selected agent: Alice LOCAL via the backend manager, fleet members via a reachability check.</summary>
+    private async Task ConnectCurrentAsync(bool force = false)
+    {
+        StatusText.Text = "Connecting…";
+        SetActivity("Connecting…");
         try
         {
-            if (_connected) { SetConnected(false); return; }
-            StatusText.Text = "Connecting…";
-            await _voice.SwitchToAsync(VoiceBackendKind.AliceVoiceAgent);
-            SetConnected(true);
+            if (IsAliceLocalSelected)
+            {
+                if (force && _voice.CurrentKind == VoiceBackendKind.AliceLocal) await _voice.ReconnectAsync();
+                else await _voice.SwitchToAsync(VoiceBackendKind.AliceLocal);
+                SetConnected(true);
+                StatusText.Text = "Alice LOCAL";
+                SetActivity("Ready", "Alice LOCAL · local (Ollama)");
+            }
+            else if (SelectedMember is { } member)
+            {
+                var ok = await _chat.IsReachableAsync(member);
+                SetConnected(ok);
+                StatusText.Text = ok ? $"{member.DisplayName} reachable"
+                                     : $"{member.DisplayName} not reachable ({(_chat.HasApiKey ? "not served / key rejected" : "no API_SERVER_KEY")})";
+                SetActivity(ok ? "Ready" : "Offline", member.DisplayName);
+            }
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Connect failed: {ex.Message}";
+            SetConnected(false);
+            StatusText.Text = "Not connected";
+            SetActivity("Offline", ex.Message);
+            ShowError($"Connect failed: {ex.Message}");
             Log.Error(ex, "Connect failed");
         }
+        UpdateStatusPanel();
     }
+
+    private Brush Res(string key) => (Brush)Application.Current.Resources[key];
 
     private void SetConnected(bool connected)
     {
         _connected = connected;
-        ConnDot.Fill = connected
-            ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"]
-            : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
+        ConnDot.Fill = connected ? Res("AppGreen") : Res("AppTextDim");
         ConnText.Text = connected ? "Disconnect" : "Connect";
         PresenceText.Text = connected ? "here with you" : "offline";
-        PresenceDot.Fill = connected
-            ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"]
-            : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
+        PresenceDot.Fill = connected ? Res("AppGreen") : Res("AppTextDim");
         ResetBtn.IsEnabled = connected;
         SendButton.IsEnabled = connected;
-        PStageWs.Foreground = connected
-            ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"]
-            : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
-        WsDisplay.Text = connected ? "ws·on" : "ws·off";
+        TalkButton.IsEnabled = connected;
+        PStageWs.Foreground = connected ? Res("AppGreen") : Res("AppTextDim");
+        WsDisplay.Text = connected ? "api·on" : "api·off";
         UpdateStatusPanel();
     }
 
-    private void Reset_Click(object sender, RoutedEventArgs e)
+    private async void Reset_Click(object sender, RoutedEventArgs e)
+    {
+        CancelTurn();
+        TranscriptPanel.Children.Clear();
+        _turnSeq = 0;
+        // Clear the model-side history too, not just the UI.
+        try
         {
-            TranscriptPanel.Children.Clear();
-            _turnSeq = 0;
-            StatusText.Text = "Ready";
-            AppendSystem("Conversation reset");
+            if (IsAliceLocalSelected) await _voice.SendCommandAsync("reset");
+            else _chat.ResetConversation(SelectedMember);
         }
+        catch (Exception ex) { Log.Warning(ex, "Reset failed"); }
+        StatusText.Text = "Ready";
+        AppendSystem("Conversation reset");
+    }
 
-        // ── Per Per-member voice assignment ──
-        private void LoadMemberVoices()
+    // ── Per-member voice assignment ──
+    private void LoadMemberVoices()
     {
         try
         {
@@ -205,6 +276,7 @@ public sealed partial class MainWindow : Window
             foreach (var (name, dto) in map)
                 _memberVoices[name] = new VoiceProfile(dto.Provider, dto.Voice);
             AddLog($"Voice assignments loaded: {_memberVoices.Count}");
+            RestoreMemberVoice();
         }
         catch (Exception ex) { Log.Warning(ex, "Failed to load voice assignments"); }
     }
@@ -240,6 +312,8 @@ public sealed partial class MainWindow : Window
     private bool IsAliceLocalSelected =>
         FleetSelector.SelectedItem is ComboBoxItem item && item.Tag is string name && name == "alice_local";
 
+    private string TargetDisplayName => IsAliceLocalSelected ? "Alice LOCAL" : SelectedMember?.DisplayName ?? "Alice";
+
     private VoiceProviderKind? SelectedProvider =>
         VoiceProviderSelect.SelectedItem is ComboBoxItem item && item.Tag is VoiceProviderKind kind ? kind : null;
 
@@ -249,12 +323,13 @@ public sealed partial class MainWindow : Window
         {
             var name = SelectedMemberName;
             if (name is not null && _memberVoices.TryGetValue(name, out var p)) return p;
-            return new VoiceProfile(SelectedProvider ?? VoiceProviderKind.AllTalk, "");
+            var voice = VoiceSelect.SelectedItem is ComboBoxItem vci && vci.Tag is string v ? v : "";
+            return new VoiceProfile(SelectedProvider ?? VoiceProviderKind.Sapi, voice);
         }
     }
 
     // ── Voice provider + voice select ──
-    private async Task LoadVoicesForSelectedProviderAsync()
+    private async Task LoadVoicesForSelectedProviderAsync(string? select = null)
     {
         try
         {
@@ -268,44 +343,55 @@ public sealed partial class MainWindow : Window
                 VoiceSelect.Items.Add(new ComboBoxItem { Content = v.Replace(".wav", ""), Tag = v });
             if (VoiceSelect.Items.Count > 0)
             {
-                var preferred = voices.FirstOrDefault(v => v.Contains("female_06")) ?? voices[0];
+                var preferred = select is not null && voices.Contains(select) ? select
+                    : voices.FirstOrDefault(v => v.Contains("female_06")) ?? voices[0];
                 foreach (var item in VoiceSelect.Items)
                     if (item is ComboBoxItem ci && ci.Tag?.ToString() == preferred) { VoiceSelect.SelectedItem = ci; break; }
             }
             AddLog($"Voices loaded: {voices.Count} ({provider.DisplayName})");
         }
         catch (Exception ex) { AddLog($"Voices: using defaults ({ex.Message})"); }
+        UpdateStatusPanel();
+    }
+
+    private bool _restoringVoice;
+
+    /// <summary>Put the selected member's saved provider + voice into the dropdowns.</summary>
+    private async void RestoreMemberVoice()
+    {
+        if (SelectedMemberName is not string name || !_memberVoices.TryGetValue(name, out var saved)) return;
+        _restoringVoice = true;
+        try
+        {
+            foreach (var item in VoiceProviderSelect.Items)
+                if (item is ComboBoxItem pi && pi.Tag is VoiceProviderKind pk && pk == saved.Provider)
+                { VoiceProviderSelect.SelectedItem = pi; break; }
+            await LoadVoicesForSelectedProviderAsync(saved.Voice);
+        }
+        finally { _restoringVoice = false; }
+        UpdateEngineChips();
     }
 
     private async void VoiceProviderSelect_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (VoiceProviderSelect.SelectedItem is not ComboBoxItem ci || ci.Tag is not VoiceProviderKind kind) return;
-        _ttsEngine = kind switch
+        UpdateEngineChips();
+        if (_initializing || _restoringVoice) return;
+        if (SelectedMemberName is string name)
         {
-            VoiceProviderKind.AllTalk => "alltalk",
-            VoiceProviderKind.Piper => "piper",
-            _ => "sapi"
-        };
-        var name = SelectedMemberName;
-        if (name is not null)
-        {
-            var profile = CurrentMemberProfile;
-            _memberVoices[name] = new VoiceProfile(kind, profile.Voice);
+            _memberVoices[name] = new VoiceProfile(kind, "");
             SaveMemberVoices();
         }
         AddLog($"Voice provider: {kind}");
         await LoadVoicesForSelectedProviderAsync();
-        UpdateStatusPanel();
     }
 
     private void VoiceSelect_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (VoiceSelect.SelectedItem is not ComboBoxItem ci || ci.Tag is not string voice) return;
-        var name = SelectedMemberName;
-        if (name is not null)
+        if (!_initializing && SelectedMemberName is string name && SelectedProvider is VoiceProviderKind kind)
         {
-            var profile = CurrentMemberProfile;
-            _memberVoices[name] = new VoiceProfile(profile.Provider, voice);
+            _memberVoices[name] = new VoiceProfile(kind, voice);
             SaveMemberVoices();
         }
         AddLog($"Voice: {voice.Replace(".wav", "").Replace("_", " ")}");
@@ -314,52 +400,67 @@ public sealed partial class MainWindow : Window
 
     // ── Test TTS ──
     private async void TestTts_Click(object sender, RoutedEventArgs e)
+    {
+        var voice = VoiceSelect.SelectedItem is ComboBoxItem vci && vci.Tag is string v ? v : "";
+        var provider = SelectedProvider ?? VoiceProviderKind.Sapi;
+        var label = $"{provider} · {voice.Replace(".wav", "").Replace("_", " ")}";
+        AppendSystem($"voice test — {label}");
+        StatusText.Text = "Speaking…";
+        SetActivity("Speaking…", label);
+        PStageTts.Foreground = Res("AppGreen");
+        try
         {
-            var voice = VoiceSelect.SelectedItem is ComboBoxItem vci && vci.Tag is string v ? v : "";
-            var provider = SelectedProvider ?? VoiceProviderKind.AllTalk;
-            var profile = new VoiceProfile(provider, voice);
-            AppendSystem($"voice test — {provider} · {voice.Replace(".wav", "").Replace("_", " ")}");
-            StatusText.Text = "Speaking…";
-            SetActivity("Speaking…", $"{provider} · {voice.Replace(".wav", "").Replace("_", " ")}");
-            PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-            await _voiceProvider.SpeakAsync(profile, "Hello Master. This is a voice quality test.");
-            PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
+            await _voiceProvider.SpeakAsync(new VoiceProfile(provider, voice), "Hello Master. This is a voice quality test.");
             StatusText.Text = "Ready";
+            SetActivity("Ready");
         }
+        catch (Exception ex)
+        {
+            StatusText.Text = "Voice test failed";
+            ShowError($"Voice test failed ({provider}): {ex.Message}");
+            Log.Warning(ex, "TTS test failed");
+        }
+        finally { PStageTts.Foreground = Res("AppTextDim"); }
+    }
 
     // ── Modes ──
     private void ModePtt_Click(object sender, RoutedEventArgs e) => SetMode("ptt");
-    private void ModeWake_Click(object sender, RoutedEventArgs e) => SetMode("wake");
+    private void ModeWake_Click(object sender, RoutedEventArgs e) => SetMode("ptt"); // wake word not implemented (button disabled)
     private void ModeText_Click(object sender, RoutedEventArgs e) => SetMode("text");
     private void ModeSoul_Click(object sender, RoutedEventArgs e)
+    {
+        if (_mode == "soul") { SetMode(_lastNonSoulMode); return; }
+        if (!IsAliceLocalSelected)
         {
-            if (_mode == "soul") { SetMode(_lastNonSoulMode); return; }
-            if (_voice.CurrentKind != VoiceBackendKind.AliceLocal)
-            {
-                StatusText.Text = "SOUL editor is only available on Alice LOCAL";
-                AppendSystem("SOUL editor requires the Alice LOCAL backend — switch Backend to Alice LOCAL first.");
-                return;
-            }
-            SetMode("soul");
+            StatusText.Text = "SOUL editor is only available on Alice LOCAL";
+            AppendSystem("The SOUL editor edits Alice LOCAL's own SOUL — select Alice LOCAL as the Agent first.");
+            return;
         }
+        SetMode("soul");
+    }
 
     private void SetMode(string mode)
     {
         if (mode != "soul" && _mode != "soul") _lastNonSoulMode = mode;
         _mode = mode;
         ModePttBtn.Style = (Style)Application.Current.Resources[mode == "ptt" ? "ChipButtonActive" : "ChipButton"];
-        ModeWakeBtn.Style = (Style)Application.Current.Resources[mode == "wake" ? "ChipButtonActive" : "ChipButton"];
+        ModeWakeBtn.Style = (Style)Application.Current.Resources["ChipButton"];
         ModeTextBtn.Style = (Style)Application.Current.Resources[mode == "text" ? "ChipButtonActive" : "ChipButton"];
         ModeSoulBtn.Style = (Style)Application.Current.Resources[mode == "soul" ? "ChipButtonActive" : "ChipButton"];
 
         TranscriptScroll.Visibility = mode == "soul" ? Visibility.Collapsed : Visibility.Visible;
         SoulEditor.Visibility = mode == "soul" ? Visibility.Visible : Visibility.Collapsed;
         TextInputRow.Visibility = mode == "text" ? Visibility.Visible : Visibility.Collapsed;
-        WakeRow.Visibility = mode == "wake" ? Visibility.Visible : Visibility.Collapsed;
+        WakeRow.Visibility = Visibility.Collapsed;
         PttRow.Visibility = mode == "ptt" ? Visibility.Visible : Visibility.Collapsed;
 
         if (mode == "soul") _ = LoadSoulAsync();
-        if (mode != "ptt" && _talking) { _ = _mic.StopAsync(); _talking = false; TalkButton.Content = "🎤 Talk"; }
+        if (mode != "ptt" && _ptt.Current != PushToTalkGesture.State.Idle)
+        {
+            _ptt.Reset();
+            _utterance.Cancel();
+            _ = StopMicAsync();
+        }
         AddLog($"Mode: {mode}");
     }
 
@@ -382,14 +483,14 @@ public sealed partial class MainWindow : Window
             var path = @"C:\Users\AHC.DAEMONLINKS\AppData\Local\hermes\profiles\alice_voice\SOUL.md";
             await File.WriteAllTextAsync(path, SoulTextarea.Text);
             SoulStatus.Text = "SOUL saved to alice_voice profile — applies on next reply";
-            SoulStatus.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
+            SoulStatus.Foreground = Res("AppGreen");
         }
         catch (Exception ex) { SoulStatus.Text = $"Save failed: {ex.Message}"; }
     }
 
     private void SoulClose_Click(object sender, RoutedEventArgs e) => SetMode(_lastNonSoulMode);
 
-    // ── Mood ──
+    // ── Mood (applies to Alice LOCAL) ──
     private void MoodNatural_Click(object sender, RoutedEventArgs e) => SetMood("natural");
     private void MoodComfort_Click(object sender, RoutedEventArgs e) => SetMood("comfort");
     private void MoodPlayful_Click(object sender, RoutedEventArgs e) => SetMood("playful");
@@ -407,7 +508,19 @@ public sealed partial class MainWindow : Window
         AddLog($"Mood → {mood}");
     }
 
-    // ── Wake sensitivity ──
+    /// <summary>Mood + response profile only shape Alice LOCAL; fleet agents keep their own style.</summary>
+    private void UpdateStyleControls()
+    {
+        var local = IsAliceLocalSelected;
+        var tip = local ? null : "Applies to Alice LOCAL only — fleet agents use their own Hermes profile settings.";
+        foreach (var b in new[] { MoodNaturalBtn, MoodComfortBtn, MoodPlayfulBtn, MoodFlirtyBtn, MoodFocusedBtn, ProfQuickBtn, ProfNaturalBtn, ProfFullBtn })
+        {
+            b.IsEnabled = local;
+            ToolTipService.SetToolTip(b, tip);
+        }
+    }
+
+    // ── Wake sensitivity (wake word not implemented; row hidden) ──
     private void WakeSensitivity_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
         if (SensitivityValue is not null)
@@ -427,28 +540,36 @@ public sealed partial class MainWindow : Window
         ProfFullBtn.Style = (Style)Application.Current.Resources[profile == "full" ? "ChipButtonActive" : "ChipButton"];
         ProfHint.Text = profile switch
         {
-            "quick" => "1–2 short sentences · tightest loop · max 160 tokens",
-            "full" => "longer, richer replies · slower loop · max 1024 tokens",
-            _ => "2–3 sentences · conversational default · max 320 tokens"
+            "quick" => $"1–2 short sentences · tightest loop · max {ReplyStyle.MaxTokens("quick")} tokens",
+            "full" => $"longer, richer replies · slower loop · max {ReplyStyle.MaxTokens("full")} tokens",
+            _ => $"2–3 sentences · conversational default · max {ReplyStyle.MaxTokens("natural")} tokens"
         };
         AddLog($"Profile → {profile}");
     }
 
-    private void TtsAlltalk_Click(object sender, RoutedEventArgs e) => SetEngine("alltalk");
-    private void TtsPiper_Click(object sender, RoutedEventArgs e) => SetEngine("piper");
+    // Engine chips select the voice provider for the current agent.
+    private void TtsAlltalk_Click(object sender, RoutedEventArgs e) => SelectProvider(VoiceProviderKind.AllTalk);
+    private void TtsPiper_Click(object sender, RoutedEventArgs e) => SelectProvider(VoiceProviderKind.Piper);
 
-    private void SetEngine(string engine)
+    private void SelectProvider(VoiceProviderKind kind)
     {
-        _ttsEngine = engine;
-        TtsAlltalkBtn.Style = (Style)Application.Current.Resources[engine == "alltalk" ? "ChipButtonActive" : "ChipButton"];
-        TtsPiperBtn.Style = (Style)Application.Current.Resources[engine == "piper" ? "ChipButtonActive" : "ChipButton"];
-        AddLog($"TTS engine → {engine}");
+        foreach (var item in VoiceProviderSelect.Items)
+            if (item is ComboBoxItem pi && pi.Tag is VoiceProviderKind pk && pk == kind)
+            { VoiceProviderSelect.SelectedItem = pi; break; }
     }
 
-    // ── Context config sliders ──
-    private void CtxPoints_ValueChanged(object sender, RangeBaseValueChangedEventArgs e) => SCtxPoints.Text = ((int)e.NewValue).ToString();
-    private void CtxHoncho_ValueChanged(object sender, RangeBaseValueChangedEventArgs e) => SCtxHoncho.Text = ((int)e.NewValue).ToString();
-    private void CtxChars_ValueChanged(object sender, RangeBaseValueChangedEventArgs e) => SCtxChars.Text = ((int)e.NewValue).ToString();
+    private void UpdateEngineChips()
+    {
+        var kind = SelectedProvider;
+        TtsAlltalkBtn.Style = (Style)Application.Current.Resources[kind == VoiceProviderKind.AllTalk ? "ChipButtonActive" : "ChipButton"];
+        TtsPiperBtn.Style = (Style)Application.Current.Resources[kind == VoiceProviderKind.Piper ? "ChipButtonActive" : "ChipButton"];
+        UpdateStatusPanel();
+    }
+
+    // ── Context config sliders (disabled: not implemented) ──
+    private void CtxPoints_ValueChanged(object sender, RangeBaseValueChangedEventArgs e) { if (SCtxPoints is not null) SCtxPoints.Text = ((int)e.NewValue).ToString(); }
+    private void CtxHoncho_ValueChanged(object sender, RangeBaseValueChangedEventArgs e) { if (SCtxHoncho is not null) SCtxHoncho.Text = ((int)e.NewValue).ToString(); }
+    private void CtxChars_ValueChanged(object sender, RangeBaseValueChangedEventArgs e) { if (SCtxChars is not null) SCtxChars.Text = ((int)e.NewValue).ToString(); }
 
     // ── Collapsible panels ──
     private void LogToggle_Click(object sender, RoutedEventArgs e)
@@ -469,6 +590,7 @@ public sealed partial class MainWindow : Window
         _settingsOpen = !_settingsOpen;
         SettingsArea.Visibility = _settingsOpen ? Visibility.Visible : Visibility.Collapsed;
         SettingsToggle.Content = (_settingsOpen ? "▾" : "▸") + "  Settings";
+        if (_settingsOpen) UpdateStatusPanel();
     }
     private void MetricsToggle_Click(object sender, RoutedEventArgs e)
     {
@@ -482,101 +604,407 @@ public sealed partial class MainWindow : Window
         TuningArea.Visibility = _tuningOpen ? Visibility.Visible : Visibility.Collapsed;
         TuningToggle.Content = (_tuningOpen ? "▾" : "▸") + "  Tuning";
     }
-    // ── Voice events ──
-        private void OnVoiceEvent(BackendEvent evt)
+
+    // ── Backend events (streaming text, status) ──
+    private void OnVoiceEvent(BackendEvent evt)
     {
         DispatcherQueue.TryEnqueue(() =>
         {
             switch (evt.Type)
             {
-                case "transcript":
-                                    AppendUser(evt.Text);
-                                    PStageStt.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-                                    SetActivity("Transcribing…", evt.Text);
-                                    break;
-                                case "reply_text":
-                                    AppendAlice(evt.Text);
-                                    PStageLlm.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-                                    SetActivity("Thinking…", evt.Text);
-                                    break;
-                                case "tts_start":
-                                    PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-                                    StatusText.Text = "Speaking…";
-                                    SetActivity("Speaking…");
-                                    break;
-                                case "tts_end":
-                                    StatusText.Text = "Ready";
-                                    SetActivity("Ready");
-                                    break;
+                case "reply_partial":
+                    // Only the turn that is currently running may update its bubble.
+                    if (_streamTurnId != 0 && _streamTurnId == _turnId && evt.Text is { Length: > 0 } partial)
+                    {
+                        if (_streamText is null) (_streamText, _streamRemember) = AppendAlice(partial, streaming: true);
+                        else _streamText.Text = partial;
+                        PStageLlm.Foreground = Res("AppGreen");
+                        ScrollToEnd();
+                    }
+                    break;
+                case "tool_call":
+                    AddLog($"Tool: {evt.Text}");
+                    SetActivity("Thinking…", $"using {evt.Text}");
+                    break;
+                case "backend_ready":
                 case "backend_switched":
-                    StatusText.Text = evt.Text;
+                case "reset_ack":
+                case "model_info":
+                    if (evt.Text is not null) AddLog(evt.Text);
                     break;
                 case "error":
-                    PStageErr.Text = evt.Text;
-                    ShowError(evt.Text);
+                    PStageErr.Text = evt.Text ?? "";
+                    ShowError(evt.Text ?? "Error");
                     break;
             }
         });
     }
 
-    private void OnVoiceAudio(byte[] pcm)
-    {
-        _tts.EnqueuePcm(pcm, 22050);
-    }
-
+    // ── Microphone ──
     private void OnMicFrame(float[] pcm16k)
     {
-        var shorts = new short[pcm16k.Length];
-        for (int i = 0; i < pcm16k.Length; i++)
+        var rms = _utterance.Append(pcm16k);
+        _vuLevel = Math.Max(_vuLevel * 0.6f, rms);
+    }
+
+    private async Task StartMicAsync()
+    {
+        _utterance.Start();
+        if (!_micRunning)
         {
-            var v = pcm16k[i] * 32768f;
-            shorts[i] = (short)Math.Clamp(v, short.MinValue, short.MaxValue);
+            await _mic.StartAsync();
+            _micRunning = true;
         }
-        _ = _voice.SendAudioAsync(shorts);
+        PStageMic.Foreground = Res("AppGreen");
+        MicTag.Text = "🎤 On";
+        MicTag.Foreground = Res("AppGreen");
+        _vuTimer ??= CreateVuTimer();
+        _vuTimer.Start();
+    }
+
+    private async Task StopMicAsync()
+    {
+        _vuTimer?.Stop();
+        _vuLevel = 0;
+        VuFill.Width = 0;
+        if (_micRunning)
+        {
+            _micRunning = false;
+            try { await _mic.StopAsync(); } catch (Exception ex) { Log.Warning(ex, "Mic stop failed"); }
+        }
+        PStageMic.Foreground = Res("AppTextDim");
+        MicTag.Text = "🎤 Off";
+        MicTag.Foreground = Res("AppRed");
+    }
+
+    private DispatcherQueueTimer CreateVuTimer()
+    {
+        var t = DispatcherQueue.CreateTimer();
+        t.Interval = TimeSpan.FromMilliseconds(50);
+        t.Tick += (_, _) =>
+        {
+            // ~-40 dBFS..0 dBFS mapped onto the 100px meter.
+            var db = 20 * Math.Log10(Math.Max(_vuLevel, 1e-5));
+            VuFill.Width = Math.Clamp((db + 40) / 40 * 100, 0, 100);
+            _vuLevel *= 0.85f;
+            if (_utterance.IsFull)
+            {
+                AddLog("Recording cap (120 s) reached — sending");
+                _ptt.Reset();
+                _ = FinishUtteranceAsync();
+            }
+        };
+        return t;
+    }
+
+    // ── Push-to-talk ──
+    private async void TalkButton_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        _pointerDrivenClick = true;
+        await ApplyPttAsync(_ptt.Press(DateTime.UtcNow));
+    }
+
+    private async void TalkButton_PointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        // Button raises Click before routed handlers run; this pointer-driven Click was already ignored.
+        _pointerDrivenClick = false;
+        await ApplyPttAsync(_ptt.Release(DateTime.UtcNow));
+    }
+
+    private async void TalkButton_PointerCanceled(object sender, PointerRoutedEventArgs e)
+    {
+        _pointerDrivenClick = false;
+        await ApplyPttAsync(_ptt.Cancel());
+    }
+
+    /// <summary>Keyboard activation (Space/Enter) toggles; pointer clicks are handled by press/release.</summary>
+    private async void TalkButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_pointerDrivenClick) return;
+        await ApplyPttAsync(_ptt.Toggle());
+    }
+
+    private async Task ApplyPttAsync(PttAction action)
+    {
+        try
+        {
+            switch (action)
+            {
+                case PttAction.StartRecording:
+                    // Talking over Alice interrupts her and cancels the turn in flight.
+                    CancelTurn();
+                    await StartMicAsync();
+                    TalkButton.Content = _ptt.Current == PushToTalkGesture.State.Latched ? "■ Send" : "🎤 Release to send";
+                    StatusText.Text = "Listening…";
+                    SetActivity("Listening…");
+                    break;
+                case PttAction.StopAndTranscribe:
+                    await FinishUtteranceAsync();
+                    break;
+                default:
+                    if (_ptt.Current == PushToTalkGesture.State.Latched) TalkButton.Content = "■ Send";
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            _ptt.Reset();
+            _utterance.Cancel();
+            await StopMicAsync();
+            TalkButton.Content = "🎤 Talk";
+            ShowError($"Microphone error: {ex.Message}");
+            Log.Error(ex, "PTT failed");
+        }
+    }
+
+    private async Task FinishUtteranceAsync()
+    {
+        var pcm = _utterance.Stop();
+        await StopMicAsync();
+        TalkButton.Content = "🎤 Talk";
+        if (pcm is null)
+        {
+            StatusText.Text = "Too short — hold Talk while you speak";
+            SetActivity("Ready");
+            return;
+        }
+
+        var turn = BeginTurn();
+        var ct = turn.Token;
+        StatusText.Text = "Transcribing…";
+        SetActivity("Transcribing…", $"{pcm.Length / 16000.0:F1}s of audio");
+        PStageStt.Foreground = Res("AppYellow");
+        SttResult stt;
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            stt = await _voice.TranscribeAsync(pcm, ct);
+        }
+        catch (OperationCanceledException) { return; }
+        catch (Exception ex)
+        {
+            PStageStt.Foreground = Res("AppRed");
+            StatusText.Text = "Transcription failed";
+            SetActivity("Ready");
+            ShowError($"Speech-to-text failed: {ex.Message}");
+            Log.Error(ex, "STT failed");
+            return;
+        }
+        PStageStt.Foreground = Res("AppGreen");
+        if (string.IsNullOrWhiteSpace(stt.Text))
+        {
+            StatusText.Text = "Didn't catch that";
+            SetActivity("Ready");
+            return;
+        }
+        await RunTurnAsync(stt.Text.Trim(), sw.ElapsedMilliseconds, turn);
+    }
+
+    // ── Turns (typed and spoken share one path) ──
+    private CancellationTokenSource BeginTurn()
+    {
+        CancelTurn();
+        _turnCts = new CancellationTokenSource();
+        _turnId++;
+        return _turnCts;
+    }
+
+    private void CancelTurn()
+    {
+        var cts = _turnCts;
+        _turnCts = null;
+        if (cts is null) return;
+        try { cts.Cancel(); } catch { }
+        cts.Dispose();
+        try { _tts.Stop(); } catch { }
+        _streamTurnId = 0;
+        _streamText = null;
+        _streamRemember = null;
+    }
+
+    private async void SendButton_Click(object sender, RoutedEventArgs e) => await SendChatAsync();
+
+    private async void ChatInput_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Enter)
+        {
+            e.Handled = true;
+            await SendChatAsync();
+        }
+    }
+
+    private async Task SendChatAsync()
+    {
+        var text = ChatInput.Text?.Trim();
+        if (string.IsNullOrEmpty(text) || !_connected) return;
+        if (SelectedMember is null && !IsAliceLocalSelected) return;
+        ChatInput.Text = "";
+        await RunTurnAsync(text, sttMs: 0, BeginTurn());
+    }
+
+    /// <summary>One conversational turn: LLM (streamed for Alice LOCAL) then speech.</summary>
+    private async Task RunTurnAsync(string text, long sttMs, CancellationTokenSource turn)
+    {
+        var ct = turn.Token;
+        var myTurn = _turnId;
+        var target = TargetDisplayName;
+        var total = Stopwatch.StartNew();
+        AppendUser($"{text} → {target}");
+        StatusText.Text = $"Talking to {target}…";
+        SetActivity("Thinking…", text);
+        PStageLlm.Foreground = Res("AppYellow");
+
+        string reply;
+        long ttft = -1;
+        var llm = Stopwatch.StartNew();
+        try
+        {
+            if (IsAliceLocalSelected)
+            {
+                _streamTurnId = myTurn;
+                _streamText = null;
+                void OnFirst(BackendEvent ev) { if (ev.Type == "reply_partial" && ttft < 0) ttft = llm.ElapsedMilliseconds; }
+                _voice.EventReceived += OnFirst;
+                try { reply = await _voice.AskAsync(text, ReplyStyle.Build(_mood, _profile), ct); }
+                finally { _voice.EventReceived -= OnFirst; }
+            }
+            else
+            {
+                var member = SelectedMember!;
+                reply = await _chat.SendAsync(member, text, ct);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            AddLog("Turn cancelled");
+            return;
+        }
+        catch (Exception ex)
+        {
+            if (myTurn == _turnId) { _streamTurnId = 0; _streamText = null; }
+            PStageLlm.Foreground = Res("AppRed");
+            AppendSystem($"{target}: (no reply — {ex.Message})");
+            StatusText.Text = "Chat failed";
+            SetActivity("Ready");
+            ShowError($"{target}: {ex.Message}");
+            Log.Error(ex, "Turn to {Target} failed", target);
+            return;
+        }
+        llm.Stop();
+        if (myTurn != _turnId) return; // superseded by a newer turn
+
+        // Finalise the (possibly streamed) bubble with the final reply.
+        if (_streamText is not null)
+        {
+            _streamText.Text = reply;
+            if (_streamRemember is not null) _streamRemember.Visibility = Visibility.Visible;
+        }
+        else AppendAlice(reply);
+        _streamTurnId = 0;
+        _streamText = null;
+        _streamRemember = null;
+        PStageLlm.Foreground = Res("AppGreen");
+
+        long ttsMs = 0;
+        if (!string.IsNullOrWhiteSpace(reply))
+        {
+            StatusText.Text = "Speaking…";
+            SetActivity("Speaking…", target);
+            PStageTts.Foreground = Res("AppGreen");
+            var tts = Stopwatch.StartNew();
+            try { await _voiceProvider.SpeakAsync(CurrentMemberProfile, reply, ct); }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                ShowError($"Speech output failed: {ex.Message}");
+                Log.Warning(ex, "TTS failed");
+            }
+            ttsMs = tts.ElapsedMilliseconds;
+            PStageTts.Foreground = Res("AppTextDim");
+        }
+        if (myTurn != _turnId) return;
+
+        RecordTiming(new TurnTiming(target, sttMs, llm.ElapsedMilliseconds, ttft < 0 ? llm.ElapsedMilliseconds : ttft, ttsMs, sttMs + total.ElapsedMilliseconds));
+        StatusText.Text = $"Replied from {target}";
+        SetActivity("Ready", target);
+    }
+
+    private void RecordTiming(TurnTiming t)
+    {
+        _timings.Add(t);
+        if (_timings.Count > 20) _timings.RemoveAt(0);
+        MTotal.Text = $"{t.TotalMs} ms";
+        MStt.Text = t.SttMs > 0 ? $"{t.SttMs} ms" : "—";
+        MLlm.Text = $"{t.LlmMs} ms";
+        MGap.Text = $"{t.TtftMs} ms";
+        MTts.Text = $"{t.TtsMs} ms";
+        var avg = _timings.Average(x => (double)x.TotalMs);
+        MetricsSummary.Text = $"{_timings.Count} turns · avg E2E {avg:F0} ms · avg LLM {_timings.Average(x => (double)x.LlmMs):F0} ms";
+        MetricsTable.Text = string.Join("\n", _timings.TakeLast(5).Reverse()
+            .Select(x => $"{x.Target}: E2E {x.TotalMs} · STT {x.SttMs} · LLM {x.LlmMs} · TTFT {x.TtftMs} · TTS {x.TtsMs} ms"));
+        TuningLastTurn.Text = $"Last turn: E2E {t.TotalMs} ms · think {t.LlmMs} ms · speak {t.TtsMs} ms";
+    }
+
+    private async void FleetSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_initializing) return;
+        CancelTurn();
+        UpdateStyleControls();
+        RestoreMemberVoice();
+        if (_mode == "soul" && !IsAliceLocalSelected) SetMode(_lastNonSoulMode);
+        // Fleet members are reached through fleet chat; Alice LOCAL through the backend manager.
+        await ConnectCurrentAsync();
     }
 
     // ── Transcript ──
+    private void ScrollToEnd()
+    {
+        // Defer until layout has measured the new content, otherwise ScrollableHeight is stale.
+        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low,
+            () => TranscriptScroll.ChangeView(null, TranscriptScroll.ScrollableHeight, null, disableAnimation: true));
+    }
+
     private void AppendUser(string text)
     {
         _turnSeq += 1;
         var n = _turnSeq;
         var d = new Border
-                {
-                    Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(0xE6, 0x00, 0x00, 0x00)),
-                    BorderBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(0x66, 0xFF, 0x3B, 0x3B)),
-                    BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(12, 12, 12, 4),
-                    Padding = new Thickness(12, 8, 12, 8),
-                    HorizontalAlignment = HorizontalAlignment.Left,
-                    MaxWidth = 600,
-                    Margin = new Thickness(0, 0, 0, 8)
-                };
-                    var stack = new StackPanel();
-                    stack.Children.Add(new TextBlock { Text = $"You  #{n} · {DateTime.Now:HH:mm:ss}", FontSize = 10, Opacity = 0.5, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppText"] });
-        stack.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppText"] });
+        {
+            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0xE6, 0x00, 0x00, 0x00)),
+            BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(0x66, 0xFF, 0x3B, 0x3B)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12, 12, 12, 4),
+            Padding = new Thickness(12, 8, 12, 8),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            MaxWidth = 600,
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+        var stack = new StackPanel();
+        stack.Children.Add(new TextBlock { Text = $"You  #{n} · {DateTime.Now:HH:mm:ss}", FontSize = 10, Opacity = 0.5, Foreground = Res("AppText") });
+        stack.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, Foreground = Res("AppText") });
         d.Child = stack;
         TranscriptPanel.Children.Add(d);
-        TranscriptScroll.ChangeView(null, TranscriptScroll.ScrollableHeight, null);
+        ScrollToEnd();
     }
 
-    private void AppendAlice(string text)
+    private (TextBlock text, Button remember) AppendAlice(string text, bool streaming = false)
     {
         var n = _turnSeq;
         var d = new Border
-                {
-                    Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(0xE6, 0x00, 0x00, 0x00)),
-                    BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppBorder"],
-                    BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(12, 12, 4, 12),
-                    Padding = new Thickness(12, 8, 12, 8),
-                    HorizontalAlignment = HorizontalAlignment.Right,
-                    MaxWidth = 600,
-                    Margin = new Thickness(0, 0, 0, 8)
-                };
-                    var stack = new StackPanel();
-                    var who = SelectedMember?.DisplayName ?? "Alice";
-        stack.Children.Add(new TextBlock { Text = $"{who}  #{n} · {DateTime.Now:HH:mm:ss}", FontSize = 10, Opacity = 0.5, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppText"] });
-        stack.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppText"] });
+        {
+            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0xE6, 0x00, 0x00, 0x00)),
+            BorderBrush = Res("AppBorder"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12, 12, 4, 12),
+            Padding = new Thickness(12, 8, 12, 8),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            MaxWidth = 600,
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+        var stack = new StackPanel();
+        stack.Children.Add(new TextBlock { Text = $"{TargetDisplayName}  #{n} · {DateTime.Now:HH:mm:ss}", FontSize = 10, Opacity = 0.5, Foreground = Res("AppText") });
+        var body = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, Foreground = Res("AppText") };
+        stack.Children.Add(body);
         var remember = new Button
         {
             Content = "♥ remember",
@@ -584,21 +1012,28 @@ public sealed partial class MainWindow : Window
             FontSize = 11,
             Padding = new Thickness(8, 2, 8, 2),
             Margin = new Thickness(0, 6, 0, 0),
-            Tag = text
+            Visibility = streaming ? Visibility.Collapsed : Visibility.Visible
         };
-        remember.Click += (_, _) => Remember(text, remember);
+        var forLocal = IsAliceLocalSelected;
+        if (!forLocal)
+        {
+            remember.IsEnabled = false;
+            ToolTipService.SetToolTip(remember, "Remember saves to Alice LOCAL's memory — available when talking to Alice LOCAL.");
+        }
+        remember.Click += (_, _) => Remember(body.Text, remember);
         stack.Children.Add(remember);
         d.Child = stack;
         TranscriptPanel.Children.Add(d);
-        TranscriptScroll.ChangeView(null, TranscriptScroll.ScrollableHeight, null);
+        ScrollToEnd();
+        return (body, remember);
     }
 
     private void AppendSystem(string text)
     {
         var pill = new Border
         {
-            Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(0x99, 0x00, 0x00, 0x00)),
-            BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppBorder"],
+            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x99, 0x00, 0x00, 0x00)),
+            BorderBrush = Res("AppBorder"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(14),
             Padding = new Thickness(14, 5, 14, 5),
@@ -609,215 +1044,93 @@ public sealed partial class MainWindow : Window
         pill.Child = new TextBlock
         {
             Text = text,
-            Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"],
+            Foreground = Res("AppTextDim"),
             FontSize = 11,
             FontStyle = Windows.UI.Text.FontStyle.Italic,
             TextAlignment = TextAlignment.Center,
             TextWrapping = TextWrapping.Wrap
         };
         TranscriptPanel.Children.Add(pill);
-        TranscriptScroll.ChangeView(null, TranscriptScroll.ScrollableHeight, null);
+        ScrollToEnd();
     }
 
-    private void Remember(string text, Button btn)
+    /// <summary>"♥ remember": save the reply to Alice LOCAL's own Honcho memory (honcho_save).</summary>
+    private async void Remember(string text, Button btn)
     {
+        if (_voice.Get(VoiceBackendKind.AliceLocal) is not AliceLocalBackend local) return;
         btn.IsEnabled = false;
         btn.Content = "…";
-        AddLog($"Memory: remember requested — {text[..Math.Min(40, text.Length)]}…");
-        btn.Content = "♥ saved";
-        btn.Opacity = 0.5;
-    }
-
-    // ── Fleet chat ──
-    private async void SendButton_Click(object sender, RoutedEventArgs e)
-        => await SendChatAsync();
-
-    private async void ChatInput_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
-    {
-        if (e.Key == Windows.System.VirtualKey.Enter)
-            await SendChatAsync();
-    }
-
-    private async Task SendChatAsync()
+        try
         {
-            var member = SelectedMember;
-            var text = ChatInput.Text?.Trim();
-            if (string.IsNullOrEmpty(text)) return;
-            if (member is null && !IsAliceLocalSelected) return;
-
-            ChatInput.Text = "";
-
-            // Alice LOCAL (first Agent entry) talks to the local backend, not fleet chat.
-            if (IsAliceLocalSelected)
-            {
-                AppendUser($"{text} → Alice LOCAL");
-                            StatusText.Text = "Talking to Alice LOCAL…";
-                            SetActivity("Thinking…", text);
-                            try
-                            {
-                                var local = _voice.Current as AliceLocalBackend;
-                                var reply = local is null ? string.Empty : await local.AskAsync(text);
-                                // AskAsync raises a reply_text event that OnVoiceEvent
-                                // already appends — do NOT append here (would double it).
-                    StatusText.Text = "Replied from Alice LOCAL";
-                    if (!string.IsNullOrWhiteSpace(reply))
-                    {
-                        PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-                        await _voiceProvider.SpeakAsync(CurrentMemberProfile, reply);
-                        PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
-                    }
-                }
-                catch (Exception ex)
-                {
-                    AppendSystem($"(no reply — {ex.Message})");
-                    StatusText.Text = $"Chat failed: {ex.Message}";
-                    Log.Error(ex, "Alice LOCAL chat failed");
-                }
-                return;
-            }
-
-            AppendUser($"{text} → {member.DisplayName}");
-            StatusText.Text = $"Talking to {member.DisplayName}…";
-            SetActivity("Thinking…", text);
-
-            try
-            {
-                var reply = await _chat.SendAsync(member, text);
-                AppendAlice(reply);
-                StatusText.Text = $"Replied from {member.DisplayName}";
-                if (!string.IsNullOrWhiteSpace(reply))
-                {
-                    PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-                    await _voiceProvider.SpeakAsync(CurrentMemberProfile, reply);
-                    PStageTts.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
-                }
-            }
-            catch (Exception ex)
-            {
-                AppendSystem($"{member.DisplayName}: (no reply — {ex.Message})");
-                StatusText.Text = $"Chat failed: {ex.Message}";
-                Log.Error(ex, "Fleet chat to {Member} failed", member.Name);
-            }
+            var content = text.Length > 1000 ? text[..1000] : text;
+            var ok = await local.RememberAsync(content);
+            btn.Content = ok ? "♥ saved" : "♥ failed";
+            btn.Opacity = ok ? 0.5 : 1;
+            if (!ok) btn.IsEnabled = true;
+            AddLog(ok ? "Memory: saved to Alice LOCAL" : "Memory: save failed (see log)");
         }
-
-    private async void FleetSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
-            {
-                // Alice LOCAL is the first Agent entry — selecting it uses the local backend.
-                if (IsAliceLocalSelected)
-                                {
-                                    StatusText.Text = "Switching to Alice LOCAL…";
-                                    try
-                                    {
-                                        await _voice.SwitchToAsync(VoiceBackendKind.AliceLocal);
-                                        StatusText.Text = "Alice LOCAL";
-                                        UpdateStatusPanel();
-                                        SetActivity("Ready", "Alice LOCAL");
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        StatusText.Text = $"Alice LOCAL switch failed: {ex.Message}";
-                                        Log.Error(ex, "Alice LOCAL switch failed");
-                                    }
-
-                                    // Restore Alice LOCAL's saved voice assignment into the dropdowns
-                                    // (same as the fleet-member branch below).
-                                    if (SelectedMemberName is string localName && _memberVoices.TryGetValue(localName, out var localSaved))
-                                    {
-                                        foreach (var item in VoiceProviderSelect.Items)
-                                            if (item is ComboBoxItem pi && pi.Tag is VoiceProviderKind pk && pk == localSaved.Provider)
-                                            { VoiceProviderSelect.SelectedItem = pi; break; }
-                                        foreach (var item in VoiceSelect.Items)
-                                            if (item is ComboBoxItem vi && vi.Tag is string vv && vv == localSaved.Voice)
-                                            { VoiceSelect.SelectedItem = vi; break; }
-                                    }
-                                    return;
-                                }
-
-                var member = SelectedMember;
-                if (member is null) return;
-                // A fleet member uses the agent backend — switch to it.
-                try { await _voice.SwitchToAsync(VoiceBackendKind.AliceVoiceAgent); }
-                catch (Exception ex) { Log.Error(ex, "Agent switch failed"); }
-
-                // Load the member's saved voice assignment into the dropdowns.
-                if (SelectedMemberName is string name && _memberVoices.TryGetValue(name, out var saved))
-                {
-                    foreach (var item in VoiceProviderSelect.Items)
-                        if (item is ComboBoxItem pi && pi.Tag is VoiceProviderKind pk && pk == saved.Provider)
-                        { VoiceProviderSelect.SelectedItem = pi; break; }
-                    await LoadVoicesForSelectedProviderAsync();
-                    foreach (var item in VoiceSelect.Items)
-                        if (item is ComboBoxItem vi && vi.Tag?.ToString() == saved.Voice)
-                        { VoiceSelect.SelectedItem = vi; break; }
-                }
-                StatusText.Text = $"Checking {member.DisplayName}…";
-                var reachable = await _chat.IsReachableAsync(member);
-                StatusText.Text = reachable
-                    ? $"{member.DisplayName} reachable"
-                    : $"{member.DisplayName} not reachable (no API key / not served)";
-                UpdateStatusPanel();
-                SetActivity(reachable ? "Ready" : "Offline", member.DisplayName);
-            }
-
-    // ── PTT ──
-    private async void TalkButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (!_talking)
+        catch (Exception ex)
         {
-            await _mic.StartAsync();
-            _talking = true;
-            TalkButton.Content = "■ Stop";
-            PStageMic.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-            MicTag.Text = "🎤 On";
-                        MicTag.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"];
-                        StatusText.Text = "Listening…";
-                        SetActivity("Listening…");
-                    }
-                    else
-                    {
-                        await _mic.StopAsync();
-                        _talking = false;
-                        TalkButton.Content = "🎤 Talk";
-                        PStageMic.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
-                        MicTag.Text = "🎤 Off";
-                        MicTag.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppRed"];
-                        StatusText.Text = "Ready";
-                        SetActivity("Ready");
-                    }
+            btn.Content = "♥ failed";
+            btn.IsEnabled = true;
+            Log.Warning(ex, "Remember failed");
+        }
     }
 
     // ── Log / Error ──
     private void AddLog(string text)
+    {
+        if (LogPanel is null) return;
+        LogPanel.Children.Add(new TextBlock
         {
-            if (LogPanel is null) return;
-            LogPanel.Children.Add(new TextBlock
-            {
-                Text = $"{DateTime.Now:HH:mm:ss}  {text}",
-                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"],
-                FontSize = 11
-            });
-        }
+            Text = $"{DateTime.Now:HH:mm:ss}  {text}",
+            Foreground = Res("AppTextDim"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap
+        });
+        while (LogPanel.Children.Count > 500) LogPanel.Children.RemoveAt(0);
+    }
 
     private void ShowError(string text)
     {
         ErrorBanner.Visibility = Visibility.Visible;
         ErrorBannerText.Text = text;
+        AddLog($"Error: {text}");
+        _errorTimer ??= CreateErrorTimer();
+        _errorTimer.Stop();
+        _errorTimer.Start();
+    }
+
+    private DispatcherQueueTimer CreateErrorTimer()
+    {
+        var t = DispatcherQueue.CreateTimer();
+        t.Interval = TimeSpan.FromSeconds(12);
+        t.IsRepeating = false;
+        t.Tick += (_, _) => ErrorBanner.Visibility = Visibility.Collapsed;
+        return t;
+    }
+
+    private void ErrorDismiss_Click(object sender, RoutedEventArgs e)
+    {
+        _errorTimer?.Stop();
+        ErrorBanner.Visibility = Visibility.Collapsed;
     }
 
     private async Task CheckForUpdatesAsync()
+    {
+        try
         {
-            try
-            {
-                var release = await _updater.CheckForUpdateAsync();
-                if (release is null) return;
-                StatusText.Text = $"Update available: {release.Version}";
-                Log.Information("Update {Version} available", release.Version);
-            }
-            catch (Exception ex)
-            {
-                Log.Warning(ex, "Background update check failed");
-            }
+            var release = await _updater.CheckForUpdateAsync();
+            if (release is null) return;
+            StatusText.Text = $"Update available: {release.Version}";
+            Log.Information("Update {Version} available", release.Version);
         }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Background update check failed");
+        }
+    }
+
     // ── Pinned status panel + live activity line ──
     private void SetActivity(string state, string? detail = null)
     {
@@ -826,22 +1139,41 @@ public sealed partial class MainWindow : Window
         ActivityDetail.Text = detail ?? "";
         ActivityDot.Fill = state switch
         {
-            "Listening…" or "Transcribing…" or "Thinking…" or "Speaking…" or "Connecting…" or "Talking to Alice LOCAL…" => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppYellow"],
-            "Ready" or "Replied from Alice LOCAL" or "here with you" => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"],
-            _ => (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"]
+            "Listening…" or "Transcribing…" or "Thinking…" or "Speaking…" or "Connecting…" => Res("AppYellow"),
+            "Ready" => Res("AppGreen"),
+            _ => Res("AppTextDim")
         };
     }
 
     private void UpdateStatusPanel()
     {
         if (StatusAgent is null) return;
-        StatusAgent.Text = IsAliceLocalSelected ? "Alice LOCAL" : (SelectedMember?.DisplayName ?? "—");
-        StatusBackend.Text = _voice.CurrentKind == VoiceBackendKind.AliceLocal ? "local (Ollama)" : "agent (Hermes)";
+        var local = IsAliceLocalSelected;
+        StatusAgent.Text = TargetDisplayName;
+        StatusBackend.Text = local ? "local (Ollama)" : "fleet (Hermes API)";
         StatusProvider.Text = SelectedProvider?.ToString() ?? "—";
-        StatusVoice.Text = VoiceSelect.SelectedItem is ComboBoxItem vci && vci.Tag is string v ? v.Replace(".wav", "").Replace("_", " ") : "—";
+        var voice = VoiceSelect.SelectedItem is ComboBoxItem vci && vci.Tag is string v ? v.Replace(".wav", "").Replace("_", " ") : "—";
+        StatusVoice.Text = voice;
         StatusConn.Text = _connected ? "connected" : "offline";
-        StatusConn.Foreground = _connected
-            ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppGreen"]
-            : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppTextDim"];
+        StatusConn.Foreground = _connected ? Res("AppGreen") : Res("AppTextDim");
+
+        var model = local ? _voice.Get(VoiceBackendKind.AliceLocal).Settings.Model : SelectedMember?.Profile ?? "—";
+        LlmModeDisplay.Text = local ? "alice_local" : SelectedMember?.Name ?? "—";
+        SettingsModel.Text = $"Brain: {(local ? "Ollama" : "Hermes")} · {model} · STT: {_voice.Stt.Status} · TTS: {SelectedProvider?.ToString() ?? "—"} · Voice: {voice} · Version: {_updater.CurrentVersion}";
+        FooterAuth.Text = local ? "Local session (no API key needed)"
+            : _chat.HasApiKey ? "API key loaded" : "No API_SERVER_KEY found";
+    }
+
+    private void OnWindowClosed()
+    {
+        try
+        {
+            CancelTurn();
+            _vuTimer?.Stop();
+            _errorTimer?.Stop();
+            _mic.AudioFrameCaptured -= OnMicFrame;
+            _voice.EventReceived -= OnVoiceEvent;
+        }
+        catch (Exception ex) { Log.Warning(ex, "Window close cleanup failed"); }
     }
 }

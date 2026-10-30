@@ -1,28 +1,29 @@
 using System.Diagnostics;
-using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using AliceVoice.Core.Config;
 using Serilog;
 
 namespace AliceVoice.Core.Voice;
 
 /// <summary>
-/// Alice LOCAL — fully local backend. Ollama for the LLM with the local SOUL
-/// file loaded as the system prompt, faster-whisper (GPU) for STT, SAPI for
-/// instant TTS. Has its OWN Honcho workspace (alice_local) plus web search,
-/// via the alice_local_tools.py bridge — mirrors the web relay's tool layer.
+/// Alice LOCAL — fully local backend. Ollama /api/chat (streamed) with the
+/// Alice LOCAL SOUL as the system prompt, rolling conversation history, and a
+/// small tool loop (own Honcho workspace + web search) through
+/// scripts/alice_local_tools.py.
 /// </summary>
 public sealed class AliceLocalBackend : IVoiceBackend
 {
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(120) };
+    private const int MaxToolTurns = 4;
+    private readonly AliceVoiceOptions _options;
+    private readonly OllamaChatClient _ollama;
     private readonly SemaphoreSlim _lock = new(1, 1);
-    private readonly ILocalTts _tts;
-    private readonly string _sttScript;
-    private readonly string _toolsScript;
+    private readonly ConversationHistory _history = new(20);
     private string _soul = "";
-    private CancellationTokenSource? _cts;
+    private string? _soulPath;
 
-    private const string ToolDescriptions =
+    internal const string ToolDescriptions =
         "You have access to these tools. To call one, reply with ONLY a JSON object " +
         "of the form {\"tool\": \"<name>\", \"args\": {...}} and nothing else. " +
         "After the tool result comes back, continue normally.\n" +
@@ -33,238 +34,242 @@ public sealed class AliceLocalBackend : IVoiceBackend
         "- search: {\"query\": \"...\"} — web search.\n" +
         "When Master asks what you know about them, call honcho_search first, then speak the results naturally.";
 
-    public AliceLocalBackend(ILocalTts tts, string? sttScript = null, string? toolsScript = null)
+    public AliceLocalBackend(AliceVoiceOptions options, OllamaChatClient? ollama = null)
     {
-        _tts = tts;
-        _sttScript = sttScript ?? Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..", "scripts", "faster_whisper_stt.py");
-        _toolsScript = toolsScript ?? Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..", "scripts", "alice_local_tools.py");
+        _options = options;
+        _ollama = ollama ?? new OllamaChatClient();
+        Settings = VoiceBackendSettings.For(VoiceBackendKind.AliceLocal, options);
     }
 
     public VoiceBackendKind Kind => VoiceBackendKind.AliceLocal;
-    public VoiceBackendSettings Settings { get; private set; } = VoiceBackendSettings.For(VoiceBackendKind.AliceLocal);
-
+    public VoiceBackendSettings Settings { get; private set; }
     public event Action<BackendEvent>? EventReceived;
-    public event Action<byte[]>? AudioReceived;
-
     public bool IsConnected { get; private set; }
+
+    /// <summary>Path of the SOUL currently loaded (null = built-in default persona).</summary>
+    public string? SoulPath => _soulPath;
+    public int SoulChars => _soul.Length;
 
     public async Task ConnectAsync(VoiceBackendSettings settings, CancellationToken ct = default)
     {
         Settings = settings;
-        _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        IsConnected = false;
+        await ReloadSoulAsync(ct);
+        await _ollama.CheckReachableAsync(settings.OllamaUrl, ct);
+        IsConnected = true;
+        Log.Information("Alice LOCAL connected at {Url}, model {Model}, SOUL {Chars} chars", settings.OllamaUrl, settings.Model, _soul.Length);
+        EventReceived?.Invoke(new BackendEvent("backend_ready",
+            $"Alice LOCAL ready — model {Settings.Model}, SOUL {(_soulPath is null ? "default" : Path.GetFileName(Path.GetDirectoryName(_soulPath)))} ({_soul.Length} chars), tools on"));
+    }
 
-        // Load the local SOUL file as the system prompt.
+    /// <summary>(Re)load the SOUL: Alice LOCAL's own file, else the read-only fallback.</summary>
+    public async Task ReloadSoulAsync(CancellationToken ct = default)
+    {
         try
         {
-            if (File.Exists(settings.SoulPath))
-                _soul = await File.ReadAllTextAsync(settings.SoulPath, ct);
-            else
-                Log.Warning("SOUL file not found at {Path}", settings.SoulPath);
+            _soulPath = SoulResolver.ReadPath(_options);
+            _soul = _soulPath is null ? "" : await File.ReadAllTextAsync(_soulPath, ct);
+            if (_soulPath is null) Log.Warning("No SOUL found for Alice LOCAL; using the default persona");
         }
-        catch (Exception ex) { Log.Warning(ex, "Failed to load SOUL file"); }
-
-        // Verify Ollama is reachable.
-        using var resp = await _http.GetAsync($"{settings.OllamaUrl}/api/tags", ct);
-        resp.EnsureSuccessStatusCode();
-        IsConnected = true;
-        Log.Information("Alice LOCAL backend connected at {Url}, model {Model}, SOUL {SoulChars} chars",
-            settings.OllamaUrl, settings.Model, _soul.Length);
-
-        EventReceived?.Invoke(new BackendEvent("backend_ready",
-            $"Alice LOCAL ready — model {Settings.Model}, SOUL loaded ({_soul.Length} chars), tools on"));
-    }
-
-    public async Task SendAudioAsync(short[] pcm16k, CancellationToken ct = default)
-    {
-        // STT: transcribe locally on the GPU via faster-whisper, then ask Ollama.
-        var text = await TranscribeAsync(pcm16k, ct);
-        if (string.IsNullOrWhiteSpace(text)) return;
-
-        EventReceived?.Invoke(new BackendEvent("transcript", text));
-        Log.Information("STT: {Text}", text);
-
-        var reply = await AskAsync(text, ct);
-        if (!string.IsNullOrWhiteSpace(reply))
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // TTS: speak the reply instantly via SAPI.
-            _tts.Speak(reply);
+            Log.Warning(ex, "Failed to load SOUL");
+            _soul = "";
+            _soulPath = null;
         }
     }
 
-    private async Task<string> TranscribeAsync(short[] pcm16k, CancellationToken ct)
-    {
-        var pcmBytes = new byte[pcm16k.Length * sizeof(short)];
-        Buffer.BlockCopy(pcm16k, 0, pcmBytes, 0, pcmBytes.Length);
-
-        var psi = new ProcessStartInfo
-        {
-            FileName = "python",
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        psi.ArgumentList.Add(_sttScript);
-        psi.ArgumentList.Add("--model");
-        psi.ArgumentList.Add(Settings.SttModel);
-        psi.ArgumentList.Add("--device");
-        psi.ArgumentList.Add("cuda");
-        psi.ArgumentList.Add("--lang");
-        psi.ArgumentList.Add("en");
-
-        using var proc = Process.Start(psi);
-        if (proc is null) return string.Empty;
-
-        await proc.StandardInput.BaseStream.WriteAsync(pcmBytes, ct);
-        proc.StandardInput.Close();
-
-        var text = (await proc.StandardOutput.ReadToEndAsync(ct)).Trim();
-        await proc.WaitForExitAsync(ct);
-        return text;
-    }
+    public void ResetConversation() => _history.Clear();
 
     public async Task SendCommandAsync(string type, object? payload = null, CancellationToken ct = default)
     {
         switch (type)
         {
             case "reset":
+                ResetConversation();
                 EventReceived?.Invoke(new BackendEvent("reset_ack", "Alice LOCAL conversation reset"));
                 break;
             case "switch_model":
-                if (payload is not null)
-                {
-                    var json = JsonSerializer.Serialize(payload);
-                    using var doc = JsonDocument.Parse(json);
-                    if (doc.RootElement.TryGetProperty("model", out var m))
-                        Settings = Settings with { Model = m.GetString() ?? Settings.Model };
-                }
+                if (ReadString(payload, "model") is { Length: > 0 } m) Settings = Settings with { Model = m };
                 EventReceived?.Invoke(new BackendEvent("model_info", $"Model: {Settings.Model}"));
                 break;
-            case "set_voice":
-                if (payload is not null)
-                {
-                    var json = JsonSerializer.Serialize(payload);
-                    using var doc = JsonDocument.Parse(json);
-                    if (doc.RootElement.TryGetProperty("voice", out var v))
-                        Settings = Settings with { TtsVoice = v.GetString() ?? Settings.TtsVoice };
-                }
-                EventReceived?.Invoke(new BackendEvent("voice_set", $"Voice: {Settings.TtsVoice}"));
+            case "reload_soul":
+                await ReloadSoulAsync(ct);
+                EventReceived?.Invoke(new BackendEvent("model_info", $"SOUL reloaded ({_soul.Length} chars)"));
                 break;
             default:
-                Log.Information("Alice LOCAL backend command {Type} (no-op)", type);
+                Log.Information("Alice LOCAL command {Type} (no-op)", type);
                 break;
         }
     }
 
-    /// <summary>Send a text prompt to Ollama with the SOUL file as system context, running a tool loop.</summary>
-    public async Task<string> AskAsync(string prompt, CancellationToken ct = default)
+    public async Task<string> AskAsync(string prompt, AskOptions? options = null, CancellationToken ct = default)
     {
+        options ??= AskOptions.Default;
         await _lock.WaitAsync(ct);
         try
         {
-            var system = string.IsNullOrWhiteSpace(_soul)
-                ? "You are Alice, a devoted and loving companion."
-                : _soul;
-            system += "\n\n" + ToolDescriptions;
+            var system = (string.IsNullOrWhiteSpace(_soul) ? "You are Alice, a devoted and loving companion." : _soul)
+                         + "\n\n" + ToolDescriptions;
+            if (!string.IsNullOrWhiteSpace(options.StyleHint)) system += "\n\n" + options.StyleHint;
 
-            var conversation = prompt;
-            for (int turn = 0; turn < 4; turn++)
+            var messages = new List<ChatMessage> { new("system", system) };
+            messages.AddRange(_history.Snapshot());
+            messages.Add(new ChatMessage("user", prompt));
+
+            string? lastToolCall = null;
+            for (int turn = 0; turn < MaxToolTurns; turn++)
             {
-                // Prevent the model from looping the same tool call in a row.
-                var thinking = new System.Text.StringBuilder();
-
-                var body = new
+                var acc = new StringBuilder();
+                var reply = await _ollama.ChatAsync(Settings.OllamaUrl, Settings.Model, messages, options.MaxTokens, delta =>
                 {
-                    model = Settings.Model,
-                    system = system,
-                    prompt = conversation,
-                    stream = true
-                };
+                    acc.Append(delta);
+                    var soFar = acc.ToString();
+                    // A reply that starts with "{" may be a tool call — don't show it.
+                    if (!soFar.TrimStart().StartsWith('{'))
+                        EventReceived?.Invoke(new BackendEvent("reply_partial", soFar));
+                }, ct);
 
-                using var resp = await _http.PostAsJsonAsync($"{Settings.OllamaUrl}/api/generate", body, ct);
-                resp.EnsureSuccessStatusCode();
-
-                var reply = string.Empty;
-                using (var stream = await resp.Content.ReadAsStreamAsync(ct))
-                using (var reader = new System.IO.StreamReader(stream))
-                {
-                    while (!reader.EndOfStream)
-                    {
-                        var line = await reader.ReadLineAsync(ct);
-                        if (string.IsNullOrWhiteSpace(line)) continue;
-                        using var doc = System.Text.Json.JsonDocument.Parse(line);
-                        var frag = doc.RootElement.GetProperty("response").GetString() ?? string.Empty;
-                        reply += frag;
-                    }
-                }
-
-                // If the reply is a tool call, execute it and feed the result back.
                 if (TryParseToolCall(reply, out var tool, out var args))
                 {
+                    var signature = tool + args;
+                    if (signature == lastToolCall)
+                    {
+                        // Same call twice in a row — stop the loop and ask for a plain answer.
+                        messages.Add(new ChatMessage("user", "[You already have that tool result. Answer Master directly now, without calling a tool.]"));
+                        lastToolCall = null;
+                        continue;
+                    }
+                    lastToolCall = signature;
                     Log.Information("Alice LOCAL tool call: {Tool}", tool);
+                    EventReceived?.Invoke(new BackendEvent("tool_call", tool));
                     var result = await RunToolAsync(tool, args, ct);
-                    conversation += $"\n\n[TOOL {tool} result: {result}]";
+                    messages.Add(new ChatMessage("assistant", reply.Trim()));
+                    messages.Add(new ChatMessage("user", $"[TOOL {tool} result: {OllamaChatClient.Truncate(result, 4000)}]"));
                     continue;
                 }
 
+                _history.AddTurn(prompt, reply);
                 EventReceived?.Invoke(new BackendEvent("reply_text", reply));
                 return reply;
             }
 
-            return string.Empty;
+            const string fallback = "Sorry Master, I got tangled up in my tools. Could you ask me again?";
+            EventReceived?.Invoke(new BackendEvent("reply_text", fallback));
+            return fallback;
         }
         finally { _lock.Release(); }
     }
 
-    private static bool TryParseToolCall(string reply, out string tool, out string argsJson)
+    /// <summary>Save a fact to Alice LOCAL's own Honcho memory (the "♥ remember" button).</summary>
+    public async Task<bool> RememberAsync(string content, CancellationToken ct = default)
+    {
+        var args = new JsonObject { ["content"] = content }.ToJsonString();
+        var result = await RunToolAsync("honcho_save", args, ct);
+        try
+        {
+            using var doc = JsonDocument.Parse(result);
+            return !doc.RootElement.TryGetProperty("error", out _);
+        }
+        catch (JsonException) { return false; }
+    }
+
+    internal static bool TryParseToolCall(string reply, out string tool, out string argsJson)
     {
         tool = "";
-        argsJson = "";
+        argsJson = "{}";
         var trimmed = reply.Trim();
-        if (!trimmed.StartsWith("{")) return false;
+        // Tolerate ```json fences around the call.
+        if (trimmed.StartsWith("```"))
+        {
+            trimmed = trimmed.Trim('`').Trim();
+            if (trimmed.StartsWith("json", StringComparison.OrdinalIgnoreCase)) trimmed = trimmed[4..].Trim();
+        }
+        if (!trimmed.StartsWith('{')) return false;
         try
         {
             using var doc = JsonDocument.Parse(trimmed);
-            if (!doc.RootElement.TryGetProperty("tool", out var t)) return false;
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return false;
+            if (!doc.RootElement.TryGetProperty("tool", out var t) || t.ValueKind != JsonValueKind.String) return false;
             tool = t.GetString() ?? "";
-            argsJson = doc.RootElement.TryGetProperty("args", out var a) ? a.GetRawText() : "{}";
-            return !string.IsNullOrEmpty(tool);
+            argsJson = doc.RootElement.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object ? a.GetRawText() : "{}";
+            return tool.Length > 0;
         }
-        catch { return false; }
+        catch (JsonException) { return false; }
+    }
+
+    /// <summary>Build the JSON line sent to the tool bridge (properly escaped).</summary>
+    internal static string BuildToolCall(string tool, string argsJson)
+    {
+        JsonNode? args;
+        try { args = JsonNode.Parse(argsJson); } catch (JsonException) { args = new JsonObject(); }
+        return new JsonObject { ["tool"] = tool, ["args"] = args ?? new JsonObject() }.ToJsonString();
     }
 
     private async Task<string> RunToolAsync(string tool, string argsJson, CancellationToken ct)
     {
-        var call = $"{{\"tool\": \"{tool}\", \"args\": {argsJson}}}";
-        var psi = new ProcessStartInfo
+        var python = RuntimeLocator.FindPython(_options);
+        var script = RuntimeLocator.FindScript("alice_local_tools.py", _options.ScriptsDir);
+        if (python is null || script is null)
+            return "{\"error\":\"tool bridge unavailable (python or alice_local_tools.py not found)\"}";
+
+        var psi = new ProcessStartInfo(python)
         {
-            FileName = "python",
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
+            RedirectStandardError = true,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
         };
-        psi.ArgumentList.Add(_toolsScript);
+        psi.ArgumentList.Add(script);
+        psi.Environment["PYTHONIOENCODING"] = "utf-8";
 
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(60));
         using var proc = Process.Start(psi);
         if (proc is null) return "{\"error\":\"tool bridge failed to start\"}";
-
-        await proc.StandardInput.WriteAsync(call.AsMemory(), ct);
-        proc.StandardInput.Close();
-
-        var result = (await proc.StandardOutput.ReadToEndAsync(ct)).Trim();
-        await proc.WaitForExitAsync(ct);
-        return string.IsNullOrEmpty(result) ? "{\"error\":\"empty tool result\"}" : result;
+        try
+        {
+            var stderrTask = proc.StandardError.ReadToEndAsync(timeout.Token);
+            var input = Encoding.UTF8.GetBytes(BuildToolCall(tool, argsJson));
+            await proc.StandardInput.BaseStream.WriteAsync(input, timeout.Token);
+            proc.StandardInput.Close();
+            var result = (await proc.StandardOutput.ReadToEndAsync(timeout.Token)).Trim();
+            await proc.WaitForExitAsync(timeout.Token);
+            var stderr = await stderrTask;
+            if (proc.ExitCode != 0)
+                Log.Warning("Tool {Tool} exited {Code}: {Err}", tool, proc.ExitCode, OllamaChatClient.Truncate(stderr.Trim(), 200));
+            return string.IsNullOrEmpty(result) ? "{\"error\":\"empty tool result\"}" : result;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            try { proc.Kill(true); } catch { }
+            return "{\"error\":\"tool timed out\"}";
+        }
+        catch
+        {
+            try { proc.Kill(true); } catch { }
+            throw;
+        }
     }
 
-    public async ValueTask DisposeAsync()
+    internal static string? ReadString(object? payload, string name)
     {
-        _cts?.Cancel();
+        if (payload is null) return null;
+        try
+        {
+            var node = JsonSerializer.SerializeToNode(payload);
+            return node?[name]?.GetValue<string>();
+        }
+        catch { return null; }
+    }
+
+    public ValueTask DisposeAsync()
+    {
         IsConnected = false;
-        _http.Dispose();
+        _ollama.Dispose();
         _lock.Dispose();
-        _cts?.Dispose();
+        return ValueTask.CompletedTask;
     }
 }

@@ -1,169 +1,85 @@
-using System.Diagnostics;
-using System.Net.Http.Headers;
-using System.Net.Http.Json;
-using System.Text.Json;
-using Serilog;
 using AliceVoice.Core.Chat;
+using AliceVoice.Core.Config;
+using Serilog;
 
 namespace AliceVoice.Core.Voice;
 
 /// <summary>
-/// The alice_voice Hermes agent backend. Uses the agent's voice settings and
-/// provider/model settings (hermes provider, model = alice_voice). Talks to the
-/// Hermes API server's OpenAI-compatible /p/alice_voice/v1 endpoint over plain
-/// HTTP — no relay, no WebSocket. STT is done locally on the GPU via the
-/// faster-whisper bridge, then the transcript is sent to the agent via AskAsync.
+/// The alice_voice Hermes agent backend: the Hermes API server's
+/// OpenAI-compatible /p/alice_voice/v1 endpoint (default 127.0.0.1:8643),
+/// with a rolling conversation history. Speech-to-text happens in the app
+/// before <see cref="AskAsync"/> is called.
 /// </summary>
 public sealed class AliceVoiceAgentBackend : IVoiceBackend
 {
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(120) };
+    private static readonly FleetMember Member = FleetRoster.Find("alice_voice") ?? new FleetMember("alice_voice", "alice_voice", "Alice Voice");
+    private HermesApiFleetChat _chat;
     private readonly SemaphoreSlim _lock = new(1, 1);
-    private readonly string _sttScript;
-    private string _apiKey = "";
 
-    public AliceVoiceAgentBackend(string? sttScript = null)
+    public AliceVoiceAgentBackend(AliceVoiceOptions options)
     {
-        _sttScript = sttScript ?? Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..", "scripts", "faster_whisper_stt.py");
+        Settings = VoiceBackendSettings.For(VoiceBackendKind.AliceVoiceAgent, options);
+        _chat = new HermesApiFleetChat(Settings.AgentEndpoint);
     }
 
     public VoiceBackendKind Kind => VoiceBackendKind.AliceVoiceAgent;
-    public VoiceBackendSettings Settings { get; private set; } = VoiceBackendSettings.For(VoiceBackendKind.AliceVoiceAgent);
-
+    public VoiceBackendSettings Settings { get; private set; }
     public event Action<BackendEvent>? EventReceived;
-    public event Action<byte[]>? AudioReceived;
-
     public bool IsConnected { get; private set; }
 
     public async Task ConnectAsync(VoiceBackendSettings settings, CancellationToken ct = default)
     {
-        Settings = settings;
-        _apiKey = ApiKeyResolver.Resolve();
-
-        // Verify the agent is reachable via the API server.
-        var url = $"{settings.AgentEndpoint}/p/alice_voice/v1/models";
-        using var req = new HttpRequestMessage(HttpMethod.Get, url);
-        if (!string.IsNullOrEmpty(_apiKey))
-            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
-
-        using var resp = await _http.SendAsync(req, ct);
-        IsConnected = resp.IsSuccessStatusCode;
-        Log.Information("alice_voice agent backend connected at {Url} (reachable: {Ok})",
-            settings.AgentEndpoint, IsConnected);
-
-        EventReceived?.Invoke(new BackendEvent("backend_ready",
-            IsConnected ? "alice_voice agent ready" : "alice_voice agent not reachable"));
-    }
-
-    public async Task SendAudioAsync(short[] pcm16k, CancellationToken ct = default)
-    {
-        // STT: transcribe locally on the GPU via faster-whisper, then ask the agent.
-        var text = await TranscribeAsync(pcm16k, ct);
-        if (string.IsNullOrWhiteSpace(text)) return;
-
-        EventReceived?.Invoke(new BackendEvent("transcript", text));
-        Log.Information("STT: {Text}", text);
-
-        var reply = await AskAsync(text, ct);
-        if (!string.IsNullOrWhiteSpace(reply))
-            EventReceived?.Invoke(new BackendEvent("reply_text", reply));
-    }
-
-    private async Task<string> TranscribeAsync(short[] pcm16k, CancellationToken ct)
-    {
-        var pcmBytes = new byte[pcm16k.Length * sizeof(short)];
-        Buffer.BlockCopy(pcm16k, 0, pcmBytes, 0, pcmBytes.Length);
-
-        var psi = new ProcessStartInfo
+        IsConnected = false;
+        if (settings.AgentEndpoint != Settings.AgentEndpoint)
         {
-            FileName = "python",
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        psi.ArgumentList.Add(_sttScript);
-        psi.ArgumentList.Add("--model");
-        psi.ArgumentList.Add(Settings.SttModel);
-        psi.ArgumentList.Add("--device");
-        psi.ArgumentList.Add("cuda");
-        psi.ArgumentList.Add("--lang");
-        psi.ArgumentList.Add("en");
-
-        using var proc = Process.Start(psi);
-        if (proc is null) return string.Empty;
-
-        await proc.StandardInput.BaseStream.WriteAsync(pcmBytes, ct);
-        proc.StandardInput.Close();
-
-        var text = (await proc.StandardOutput.ReadToEndAsync(ct)).Trim();
-        await proc.WaitForExitAsync(ct);
-        return text;
+            _chat.Dispose();
+            _chat = new HermesApiFleetChat(settings.AgentEndpoint);
+        }
+        Settings = settings;
+        await _chat.EnsureReachableAsync(Member, ct); // throws when unreachable / unauthorised
+        IsConnected = true;
+        Log.Information("alice_voice agent backend connected at {Url}", settings.AgentEndpoint);
+        EventReceived?.Invoke(new BackendEvent("backend_ready", "alice_voice agent ready"));
     }
 
-    public async Task SendCommandAsync(string type, object? payload = null, CancellationToken ct = default)
+    public void ResetConversation() => _chat.ResetConversation(Member);
+
+    public Task SendCommandAsync(string type, object? payload = null, CancellationToken ct = default)
     {
         switch (type)
         {
             case "reset":
+                ResetConversation();
                 EventReceived?.Invoke(new BackendEvent("reset_ack", "Agent conversation reset"));
                 break;
             case "switch_model":
-                EventReceived?.Invoke(new BackendEvent("model_info", $"Model: {Settings.Model}"));
-                break;
-            case "set_voice":
-                EventReceived?.Invoke(new BackendEvent("voice_set", $"Voice: {Settings.TtsVoice}"));
+                EventReceived?.Invoke(new BackendEvent("model_info", $"Model: {Settings.Model} (set by the Hermes profile)"));
                 break;
             default:
                 Log.Information("Agent backend command {Type} (no-op)", type);
                 break;
         }
+        return Task.CompletedTask;
     }
 
-    /// <summary>Send a text prompt to the alice_voice agent and raise the reply.</summary>
-    public async Task<string> AskAsync(string prompt, CancellationToken ct = default)
+    /// <summary>Send one turn to the alice_voice agent. Raises reply_text exactly once.</summary>
+    public async Task<string> AskAsync(string prompt, AskOptions? options = null, CancellationToken ct = default)
     {
         await _lock.WaitAsync(ct);
         try
         {
-            var url = $"{Settings.AgentEndpoint}/p/alice_voice/v1/chat/completions";
-            var body = new
-            {
-                model = "alice_voice",
-                messages = new[] { new { role = "user", content = prompt } },
-                stream = false
-            };
-
-            using var req = new HttpRequestMessage(HttpMethod.Post, url);
-            if (!string.IsNullOrEmpty(_apiKey))
-                req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
-            req.Content = JsonContent.Create(body);
-
-            using var resp = await _http.SendAsync(req, ct);
-            var raw = await resp.Content.ReadAsStringAsync(ct);
-            if (!resp.IsSuccessStatusCode)
-            {
-                Log.Warning("Agent chat failed: {Code} {Body}", (int)resp.StatusCode, raw);
-                return string.Empty;
-            }
-
-            using var doc = JsonDocument.Parse(raw);
-            var reply = doc.RootElement
-                .GetProperty("choices")[0]
-                .GetProperty("message")
-                .GetProperty("content")
-                .GetString() ?? string.Empty;
-
+            var reply = await _chat.SendAsync(Member, prompt, ct);
             EventReceived?.Invoke(new BackendEvent("reply_text", reply));
             return reply;
         }
         finally { _lock.Release(); }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         IsConnected = false;
-        _http.Dispose();
+        _chat.Dispose();
         _lock.Dispose();
+        return ValueTask.CompletedTask;
     }
 }

@@ -14,12 +14,13 @@ public static class ApiKeyResolver
         if (!string.IsNullOrEmpty(env)) return env;
 
         // 2. Hermes .env files (default profile, then named profiles).
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        // Never log the key value itself.
+        var hermes = new Config.AliceVoiceOptions().HermesHome;
         var candidates = new[]
         {
-            Path.Combine(home, "hermes", ".env"),
-            Path.Combine(home, "hermes", "profiles", "alice_voice", ".env"),
-            Path.Combine(home, "hermes", "profiles", "default", ".env")
+            Path.Combine(hermes, ".env"),
+            Path.Combine(hermes, "profiles", "alice_voice", ".env"),
+            Path.Combine(hermes, "profiles", "default", ".env")
         };
 
         foreach (var path in candidates)

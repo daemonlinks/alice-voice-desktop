@@ -1,79 +1,53 @@
+using AliceVoice.Core.Config;
+
 namespace AliceVoice.Core.Voice;
 
 /// <summary>
-/// The operating states of the app. Each routes the voice pipeline
-/// (STT → LLM → TTS) through a different backend.
+/// The operating states of the app. Each routes the LLM turn through a
+/// different backend (speech-to-text and speech output are shared).
 /// </summary>
 public enum VoiceBackendKind
 {
-    /// <summary>The alice_voice Hermes agent (voice + provider/model settings).</summary>
+    /// <summary>The alice_voice Hermes agent via the Hermes API server.</summary>
     AliceVoiceAgent,
 
-    /// <summary>Local Ollama backend with a defined model + voice (STT/TTS configurable).</summary>
+    /// <summary>Plain local Ollama chat (no SOUL, no tools).</summary>
     LocalOllama,
 
-    /// <summary>Alice LOCAL — fully local: Ollama LLM + the local SOUL file as system prompt.</summary>
+    /// <summary>Alice LOCAL — Ollama + the Alice LOCAL SOUL as system prompt + tools.</summary>
     AliceLocal
 }
 
 /// <summary>
-/// Per-backend configuration: which LLM provider/model and which STT/TTS
-/// engines to use. Each state carries its own settings.
+/// Per-backend LLM configuration. Endpoints default from
+/// <see cref="AliceVoiceOptions"/> (appsettings.json / ALICEVOICE_* env), never
+/// from hardcoded user paths. Speech output is chosen per agent in the UI
+/// (voice-assignments.json), not here.
 /// </summary>
 public sealed record VoiceBackendSettings
 {
     public VoiceBackendKind Kind { get; init; }
 
-    // LLM
-    public string Provider { get; init; } = "ollama";   // ollama | openrouter | hermes
+    /// <summary>ollama | hermes</summary>
+    public string Provider { get; init; } = "ollama";
     public string Model { get; init; } = "dolphin-llama3:8b";
 
-    // STT
-    public string SttEngine { get; init; } = "whisper"; // whisper | faster-whisper
-    public string SttModel { get; init; } = "large-v3";
-
-    // TTS
-    public string TtsEngine { get; init; } = "edge";    // alltalk | edge
-    public string TtsVoice { get; init; } = "en-GB-SoniaNeural";
-
-    // Endpoints
     public string OllamaUrl { get; init; } = "http://localhost:11434";
-    public string AgentEndpoint { get; init; } = "http://127.0.0.1:8642";
 
-    // Local SOUL file used as the system prompt for the Alice LOCAL backend.
-    public string SoulPath { get; init; } = @"C:\Users\AHC.DAEMONLINKS\AppData\Local\hermes\profiles\alice_voice\SOUL.md";
+    /// <summary>Hermes API server (OpenAI-compatible, /p/&lt;profile&gt;/v1). 8643, not 8642 (wslrelay).</summary>
+    public string AgentEndpoint { get; init; } = "http://127.0.0.1:8643";
 
-    public static VoiceBackendSettings For(VoiceBackendKind kind) => kind switch
+    public static VoiceBackendSettings For(VoiceBackendKind kind, AliceVoiceOptions? options = null)
     {
-        VoiceBackendKind.AliceVoiceAgent => new VoiceBackendSettings
+        var o = options ?? new AliceVoiceOptions();
+        var s = new VoiceBackendSettings
         {
             Kind = kind,
-            Provider = "hermes",
-            Model = "alice_voice",
-            SttEngine = "whisper",
-            SttModel = "large-v3",
-            TtsEngine = "edge"
-        },
-        VoiceBackendKind.LocalOllama => new VoiceBackendSettings
-        {
-            Kind = kind,
-            Provider = "ollama",
-            Model = "dolphin-llama3:8b",
-            SttEngine = "whisper",
-            SttModel = "large-v3",
-            TtsEngine = "edge",
-            TtsVoice = "en-GB-SoniaNeural"
-        },
-        VoiceBackendKind.AliceLocal => new VoiceBackendSettings
-        {
-            Kind = kind,
-            Provider = "ollama",
-            Model = "dolphin-llama3:8b",
-            SttEngine = "whisper",
-            SttModel = "large-v3",
-            TtsEngine = "edge",
-            TtsVoice = "en-GB-SoniaNeural"
-        },
-        _ => new VoiceBackendSettings { Kind = kind }
-    };
+            OllamaUrl = o.ResolvedOllamaUrl,
+            AgentEndpoint = o.ResolvedHermesApiUrl
+        };
+        return kind == VoiceBackendKind.AliceVoiceAgent
+            ? s with { Provider = "hermes", Model = "alice_voice" }
+            : s;
+    }
 }

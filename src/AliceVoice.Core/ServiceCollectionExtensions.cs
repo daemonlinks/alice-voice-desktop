@@ -17,9 +17,13 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IGpuSelector>(_ => new NvidiaGpuSelector(opts.SttGpuIndex));
         services.AddSingleton<ISttClient, FasterWhisperSttClient>();
         services.AddSingleton<IAppUpdater>(_ => new HttpAppUpdater(opts.ResolvedUpdateManifestUrl));
-        services.AddSingleton<IVoiceBackendManager, VoiceBackendManager>();
+        services.AddSingleton<IVoiceBackend>(_ => new AliceLocalBackend(opts));
+        services.AddSingleton<IVoiceBackend>(_ => new LocalOllamaBackend(opts));
+        services.AddSingleton<IVoiceBackend>(_ => new AliceVoiceAgentBackend(opts));
+        services.AddSingleton<IVoiceBackendManager>(sp => new VoiceBackendManager(
+            sp.GetServices<IVoiceBackend>(), sp.GetRequiredService<ISttClient>(), opts));
         services.AddSingleton<IVoiceProviderManager, VoiceProviderManager>();
-        services.AddSingleton<IFleetChat, HermesApiFleetChat>();
+        services.AddSingleton<IFleetChat>(_ => new HermesApiFleetChat(opts.ResolvedHermesApiUrl));
         return services;
     }
 }
