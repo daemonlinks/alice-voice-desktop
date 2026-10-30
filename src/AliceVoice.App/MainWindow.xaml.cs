@@ -474,13 +474,19 @@ public sealed partial class MainWindow : Window
         {
             var doc = await _soulStore.LoadAsync();
             SoulTextarea.Text = doc.Text;
-            SoulStatus.Text = doc.IsLocal
-                ? $"Editing Alice LOCAL SOUL ({doc.TargetPath})"
-                : doc.SourcePath is null
-                    ? $"No SOUL yet — Save creates {doc.TargetPath}"
-                    : $"Pre-filled from read-only {doc.SourcePath} — Save writes a new Alice LOCAL SOUL ({doc.TargetPath}); the original is never changed";
+            if (doc.CreatedFromTemplate)
+            {
+                SoulStatus.Text = $"No Alice LOCAL SOUL existed, so a neutral starter template was created at {doc.Path}. Edit it and Save. Agent SOULs are never used.";
+                SoulStatus.Foreground = Res("AppYellow");
+                AddLog($"Created starter Alice LOCAL SOUL at {doc.Path}");
+            }
+            else SoulStatus.Text = $"Editing Alice LOCAL SOUL ({doc.Path})";
         }
-        catch (Exception ex) { SoulStatus.Text = $"Load failed: {ex.Message}"; }
+        catch (Exception ex)
+        {
+            SoulStatus.Text = $"Load failed: {ex.Message}";
+            SoulStatus.Foreground = Res("AppRed");
+        }
     }
 
     private async void SoulSave_Click(object sender, RoutedEventArgs e)

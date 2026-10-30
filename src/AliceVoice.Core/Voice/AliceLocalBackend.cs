@@ -62,18 +62,23 @@ public sealed class AliceLocalBackend : IVoiceBackend
             $"Alice LOCAL ready — model {Settings.Model}, SOUL {(_soulPath is null ? "default" : Path.GetFileName(Path.GetDirectoryName(_soulPath)))} ({_soul.Length} chars), tools on"));
     }
 
-    /// <summary>(Re)load the SOUL: Alice LOCAL's own file, else the read-only fallback.</summary>
+    /// <summary>
+    /// (Re)load the SOUL: ONLY Alice LOCAL's own local SOUL file. If it does
+    /// not exist a neutral starter template is created; no agent SOUL is ever
+    /// read. On error the built-in default persona is used.
+    /// </summary>
     public async Task ReloadSoulAsync(CancellationToken ct = default)
     {
         try
         {
-            _soulPath = SoulResolver.ReadPath(_options);
-            _soul = _soulPath is null ? "" : await File.ReadAllTextAsync(_soulPath, ct);
-            if (_soulPath is null) Log.Warning("No SOUL found for Alice LOCAL; using the default persona");
+            var doc = await new SoulStore(_options).LoadAsync(ct);
+            _soul = doc.Text;
+            _soulPath = doc.Path;
+            if (doc.CreatedFromTemplate) Log.Information("Created starter Alice LOCAL SOUL at {Path}", doc.Path);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Log.Warning(ex, "Failed to load SOUL");
+            Log.Warning(ex, "Failed to load the Alice LOCAL SOUL; using the default persona");
             _soul = "";
             _soulPath = null;
         }

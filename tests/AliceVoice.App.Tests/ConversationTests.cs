@@ -147,22 +147,22 @@ public class SoulResolverTests
 {
     private static AliceVoiceOptions Opts(string root) => new()
     {
-        AliceLocalSoulPath = Path.Combine(root, "alice_local", "SOUL.md"),
-        SoulFallbackPath = Path.Combine(root, "hermes", "profiles", "alice_voice", "SOUL.md")
+        AliceLocalSoulPath = Path.Combine(root, "alice_local", "SOUL.md")
     };
 
     [Fact]
-    public void PrefersLocalSoul()
+    public void ReadsOnlyTheLocalSoul()
     {
         var o = Opts(Path.GetTempPath());
         Assert.Equal(o.ResolvedAliceLocalSoulPath, SoulResolver.ReadPath(o, _ => true));
     }
 
     [Fact]
-    public void FallsBackReadOnly()
+    public void MissingLocalSoulGivesNullNeverAnAgentSoul()
     {
         var o = Opts(Path.GetTempPath());
-        Assert.Equal(o.ResolvedSoulFallbackPath, SoulResolver.ReadPath(o, p => p == o.ResolvedSoulFallbackPath));
+        var agent = Path.Combine(o.HermesHome, "profiles", "alice_voice", "SOUL.md");
+        Assert.Null(SoulResolver.ReadPath(o, p => p == agent));
         Assert.Null(SoulResolver.ReadPath(o, _ => false));
     }
 
@@ -171,7 +171,7 @@ public class SoulResolverTests
     {
         var o = Opts(Path.GetTempPath());
         Assert.True(SoulResolver.IsWritable(o, o.ResolvedAliceLocalSoulPath));
-        Assert.False(SoulResolver.IsWritable(o, o.ResolvedSoulFallbackPath));
+        Assert.False(SoulResolver.IsWritable(o, Path.Combine(o.HermesHome, "profiles", "alice_voice", "SOUL.md")));
         Assert.False(SoulResolver.IsWritable(o, Path.Combine(Path.GetTempPath(), "other.md")));
     }
 
@@ -180,6 +180,16 @@ public class SoulResolverTests
     {
         var o = new AliceVoiceOptions { AliceLocalSoulPath = Path.Combine(new AliceVoiceOptions().HermesHome, "profiles", "alice_voice", "SOUL.md") };
         Assert.False(SoulResolver.IsWritable(o, o.ResolvedAliceLocalSoulPath));
+        Assert.Null(SoulResolver.ReadPath(o, _ => true));
+    }
+
+    [Fact]
+    public void DetectsAgentSoulPaths()
+    {
+        var o = new AliceVoiceOptions();
+        Assert.True(SoulResolver.IsAgentSoulPath(o, Path.Combine(o.HermesHome, "profiles", "alice_2", "SOUL.md")));
+        Assert.False(SoulResolver.IsAgentSoulPath(o, o.ResolvedAliceLocalSoulPath));
+        Assert.StartsWith(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), o.ResolvedAliceLocalSoulPath, StringComparison.OrdinalIgnoreCase);
     }
 }
 

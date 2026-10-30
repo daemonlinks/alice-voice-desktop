@@ -4,33 +4,42 @@ namespace AliceVoice.Core.Voice;
 
 /// <summary>
 /// Decides which SOUL file Alice LOCAL reads and which file the SOUL editor
-/// may write. The editor only ever writes the Alice LOCAL SOUL
-/// (<see cref="AliceVoiceOptions.ResolvedAliceLocalSoulPath"/>); the Hermes
-/// alice_voice profile SOUL is a read-only fallback and is never written.
+/// may write. Alice LOCAL uses ONLY its own local SOUL
+/// (<see cref="AliceVoiceOptions.ResolvedAliceLocalSoulPath"/>, shared with the
+/// Alice Voice web app). No agent SOUL (any Hermes profile SOUL) is ever read
+/// as a fallback or written by the editor.
 /// </summary>
 public static class SoulResolver
 {
-    /// <summary>The SOUL Alice LOCAL should load: its own if present, else the read-only fallback.</summary>
+    /// <summary>
+    /// The SOUL Alice LOCAL should load: its own local file if it exists and is
+    /// not an agent SOUL, otherwise null (never any other file).
+    /// </summary>
     public static string? ReadPath(AliceVoiceOptions o, Func<string, bool>? fileExists = null)
     {
         fileExists ??= File.Exists;
-        if (fileExists(o.ResolvedAliceLocalSoulPath)) return o.ResolvedAliceLocalSoulPath;
-        if (fileExists(o.ResolvedSoulFallbackPath)) return o.ResolvedSoulFallbackPath;
-        return null;
+        var local = o.ResolvedAliceLocalSoulPath;
+        if (IsAgentSoulPath(o, local)) return null;
+        return fileExists(local) ? local : null;
     }
 
     /// <summary>
     /// True if the editor may write <paramref name="path"/>: it must be the
-    /// configured Alice LOCAL SOUL, must not be the fallback, and must not live
-    /// under any Hermes profile folder.
+    /// configured Alice LOCAL SOUL and must not live under any Hermes profile
+    /// folder (agent SOULs).
     /// </summary>
     public static bool IsWritable(AliceVoiceOptions o, string path)
     {
         var full = Normalize(path);
         if (!string.Equals(full, Normalize(o.ResolvedAliceLocalSoulPath), StringComparison.OrdinalIgnoreCase)) return false;
-        if (string.Equals(full, Normalize(o.ResolvedSoulFallbackPath), StringComparison.OrdinalIgnoreCase)) return false;
+        return !IsAgentSoulPath(o, full);
+    }
+
+    /// <summary>True if <paramref name="path"/> is inside the Hermes profiles folder (an agent's SOUL/config).</summary>
+    public static bool IsAgentSoulPath(AliceVoiceOptions o, string path)
+    {
         var profiles = Normalize(Path.Combine(o.HermesHome, "profiles")) + Path.DirectorySeparatorChar;
-        return !full.StartsWith(profiles, StringComparison.OrdinalIgnoreCase);
+        return Normalize(path).StartsWith(profiles, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string Normalize(string p) => Path.GetFullPath(p).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);

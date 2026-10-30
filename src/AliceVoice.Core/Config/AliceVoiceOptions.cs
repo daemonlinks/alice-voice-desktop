@@ -17,11 +17,14 @@ public sealed class AliceVoiceOptions
     /// <summary>Folder holding faster_whisper_stt.py / alice_local_tools.py (ALICEVOICE_SCRIPTS).</summary>
     public string? ScriptsDir { get; set; }
 
-    /// <summary>The SOUL.md the Alice LOCAL backend uses and the SOUL editor edits (ALICEVOICE_SOUL_LOCAL).</summary>
+    /// <summary>
+    /// Alice LOCAL's own SOUL.md: the only SOUL Alice LOCAL reads and the only
+    /// file the SOUL editor edits (ALICEVOICE_SOUL_LOCAL). Default is the
+    /// machine-wide <c>%ProgramData%\AliceVoice\alice_local\SOUL.md</c> so the
+    /// desktop app and the web relay (which runs as a service) share one file.
+    /// Never an agent (Hermes profile) SOUL.
+    /// </summary>
     public string? AliceLocalSoulPath { get; set; }
-
-    /// <summary>Read-only SOUL used as Alice LOCAL's prompt until it has its own copy (ALICEVOICE_SOUL_FALLBACK).</summary>
-    public string? SoulFallbackPath { get; set; }
 
     /// <summary>Background image folder (ALICEVOICE_BACKGROUNDS).</summary>
     public string? BackgroundsDir { get; set; }
@@ -54,10 +57,11 @@ public sealed class AliceVoiceOptions
 
     [JsonIgnore] public string LocalAppData => Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
     [JsonIgnore] public string AppDataDir => Path.Combine(LocalAppData, "AliceVoice");
+    /// <summary>Machine-wide Alice Voice data shared with the web relay (%ProgramData%\AliceVoice).</summary>
+    [JsonIgnore] public string SharedDataDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "AliceVoice");
     [JsonIgnore] public string HermesHome => Environment.GetEnvironmentVariable("HERMES_HOME") is { Length: > 0 } h ? h : Path.Combine(LocalAppData, "hermes");
 
-    [JsonIgnore] public string ResolvedAliceLocalSoulPath => AliceLocalSoulPath ?? Path.Combine(AppDataDir, "alice_local", "SOUL.md");
-    [JsonIgnore] public string ResolvedSoulFallbackPath => SoulFallbackPath ?? Path.Combine(HermesHome, "profiles", "alice_voice", "SOUL.md");
+    [JsonIgnore] public string ResolvedAliceLocalSoulPath => AliceLocalSoulPath ?? Path.Combine(SharedDataDir, "alice_local", "SOUL.md");
     [JsonIgnore] public string ResolvedBackgroundsDir => BackgroundsDir ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "ahc-the-beast", "voice", "Mirrored");
     [JsonIgnore] public string ResolvedPiperExe => PiperExe ?? Path.Combine(HermesHome, "hermes-agent", "venv", "Scripts", "piper.exe");
     [JsonIgnore] public string ResolvedPiperVoicesDir => PiperVoicesDir ?? Path.Combine(HermesHome, "cache", "piper-voices");
@@ -98,7 +102,6 @@ public sealed class AliceVoiceOptions
         o.PythonPath = Env(env, "ALICEVOICE_PYTHON") ?? o.PythonPath;
         o.ScriptsDir = Env(env, "ALICEVOICE_SCRIPTS") ?? o.ScriptsDir;
         o.AliceLocalSoulPath = Env(env, "ALICEVOICE_SOUL_LOCAL") ?? o.AliceLocalSoulPath;
-        o.SoulFallbackPath = Env(env, "ALICEVOICE_SOUL_FALLBACK") ?? o.SoulFallbackPath;
         o.BackgroundsDir = Env(env, "ALICEVOICE_BACKGROUNDS") ?? o.BackgroundsDir;
         o.PiperExe = Env(env, "ALICEVOICE_PIPER") ?? o.PiperExe;
         o.PiperVoicesDir = Env(env, "ALICEVOICE_PIPER_VOICES") ?? o.PiperVoicesDir;

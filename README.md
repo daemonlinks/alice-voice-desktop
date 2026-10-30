@@ -58,12 +58,15 @@ values are never logged.
 
 ## SOUL editor
 
-The editor only ever writes the **Alice LOCAL** SOUL, by default
-`%LOCALAPPDATA%\AliceVoice\alice_local\SOUL.md` (`ALICEVOICE_SOUL_LOCAL`).
-The Hermes `profiles\alice_voice\SOUL.md` is a read-only fallback used until
-the local copy exists; it is never overwritten. Before each save the previous
-file is copied to `alice_local\backups\SOUL.yyyyMMdd-HHmmss-fff.md`, the new
-text is written atomically, and Alice LOCAL reloads it.
+Alice LOCAL uses **only** its own SOUL file,
+`%ProgramData%\AliceVoice\alice_local\SOUL.md` (`ALICEVOICE_SOUL_LOCAL`).
+It is machine-wide so the Windows app and the Alice Voice web relay (which runs
+as a service) can share one file. No agent SOUL (any Hermes
+`profiles\*\SOUL.md`) is ever read, used as a fallback, or written; paths
+under Hermes `profiles` are refused. If the file does not exist, a neutral
+starter template is created and the editor shows a notice. Before each save
+the previous file is copied to `alice_local\backups\SOUL.yyyyMMdd-HHmmss-fff.md`,
+the new text is written atomically, and Alice LOCAL reloads it.
 
 ## Configuration
 
@@ -71,7 +74,7 @@ Settings come from `%LOCALAPPDATA%\AliceVoice\appsettings.json` (optional,
 property names as in `AliceVoiceOptions`), overridden by environment variables:
 
 `ALICEVOICE_PYTHON`, `ALICEVOICE_SCRIPTS`, `ALICEVOICE_SOUL_LOCAL`,
-`ALICEVOICE_SOUL_FALLBACK`, `ALICEVOICE_BACKGROUNDS`, `ALICEVOICE_PIPER`,
+`ALICEVOICE_BACKGROUNDS`, `ALICEVOICE_PIPER`,
 `ALICEVOICE_PIPER_VOICES`, `ALICEVOICE_ALLTALK_URL`, `ALICEVOICE_OLLAMA_URL`,
 `ALICEVOICE_HERMES_URL`, `ALICEVOICE_STT_MODEL`, `ALICEVOICE_STT_COMPUTE`,
 `ALICEVOICE_STT_CPU_MODEL`, `ALICEVOICE_STT_GPU`, `ALICEVOICE_UPDATE_URL`.
