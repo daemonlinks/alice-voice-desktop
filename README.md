@@ -26,6 +26,11 @@ AliceVoice.sln
 Audio classes are named `Wasapi*` for history, but use NAudio `WaveIn` /
 `WaveOut` on the Windows default devices (mic captured at 16 kHz mono).
 
+`AliceVoice.Inference` is also where the wake-word ONNX runner lives; that part
+IS used by the app and runs on the CPU only (ONNX Runtime CPU provider), so it
+never touches a GPU. The wake-word models are in `models/wakeword/`, the
+training scripts in `tools/wakeword-training/`.
+
 ## Speech-to-text (push-to-talk)
 
 Hold the talk button: audio is recorded while held and transcribed once on
@@ -36,6 +41,45 @@ model `large-v3`, `int8_float32`). The Python used is, in order:
 on PATH — the Microsoft Store `WindowsApps` stub is always skipped.
 The script is looked up in `ALICEVOICE_SCRIPTS` / `ScriptsDir`, then in a
 `scripts\` folder next to the exe (copied at build) or in a parent folder (repo).
+
+## Wake word (hands-free)
+
+Switch the voice panel to **Wake** mode and say **"hey alice"**, then your
+request: the app records until you stop talking (energy VAD, ~0.9 s of
+silence), then runs exactly the same transcribe -> reply -> speak turn as
+push-to-talk. Detection is paused while a turn is recording, thinking or
+speaking (so Alice does not wake herself), and resumes afterwards.
+Push-to-talk keeps working; holding it while in Wake mode simply
+starts a normal PTT turn. The "Wake word:" label shows which wake word is
+active (an interim model is marked "(interim test model)"). The
+**Sensitivity** slider is `1 - threshold` (higher triggers more easily).
+Wake listening is off by default and the Wake button is disabled when no model
+is installed.
+
+The engine is a .NET re-implementation of the openWakeWord 0.6.0 streaming
+pipeline (1280-sample / 80 ms chunks -> `melspectrogram.onnx` ->
+`embedding_model.onnx` -> 16 x 96 features -> classifier), on ONNX Runtime
+CPU. `tests/AliceVoice.App.Tests/WakeWordParityTests.cs` compares it frame by
+frame with the Python package on SAPI recordings
+(`tests/fixtures/wakeword`, reference scores from
+`tools/wakeword-parity/oww_reference.py`): max difference < 0.001.
+
+Models: `models/wakeword/wakeword-models.json` lists each file with its
+SHA-256; every file is hashed before loading and a mismatch is refused.
+The folder is searched in this order: `WakeWordDir` /
+`ALICEVOICE_WAKEWORD_DIR`, `%ProgramData%\AliceVoice\wakeword`,
+`models\wakeword` next to the exe (copied at build), then `models\wakeword` in
+a parent folder (repo checkout). The default model is `hey_alice`
+(`hey_alice_v0.1.onnx`, threshold 0.5, patience 3 frames), trained from Piper
+synthetic speech with `tools/wakeword-training` (see its README and
+`hey_alice_v0.1.report.json`). openWakeWord's `hey_jarvis` is still shipped as
+the interim/test model (`ALICEVOICE_WAKEWORD_MODEL=hey_jarvis`).
+
+Licences: openWakeWord's code is Apache-2.0 (re-implemented here, not
+bundled). Its pre-trained models (`melspectrogram`, `embedding_model`,
+`hey_jarvis`) and our `hey_alice` (a derivative of them and of the
+CC BY-NC-SA ACAV100M features) are **CC BY-NC-SA 4.0 - non-commercial**.
+See `models/wakeword/NOTICE.md`.
 
 ## GPU strategy
 
@@ -77,7 +121,11 @@ property names as in `AliceVoiceOptions`), overridden by environment variables:
 `ALICEVOICE_BACKGROUNDS`, `ALICEVOICE_PIPER`,
 `ALICEVOICE_PIPER_VOICES`, `ALICEVOICE_ALLTALK_URL`, `ALICEVOICE_OLLAMA_URL`,
 `ALICEVOICE_HERMES_URL`, `ALICEVOICE_STT_MODEL`, `ALICEVOICE_STT_COMPUTE`,
-`ALICEVOICE_STT_CPU_MODEL`, `ALICEVOICE_STT_GPU`, `ALICEVOICE_UPDATE_URL`.
+`ALICEVOICE_STT_CPU_MODEL`, `ALICEVOICE_STT_GPU`, `ALICEVOICE_UPDATE_URL`,
+`ALICEVOICE_WAKEWORD_DIR`, `ALICEVOICE_WAKEWORD_MODEL`,
+`ALICEVOICE_WAKEWORD_THRESHOLD`, `ALICEVOICE_WAKEWORD_PATIENCE`,
+`ALICEVOICE_WAKE_END_SILENCE_MS`, `ALICEVOICE_WAKE_SPEECH_RMS`,
+`ALICEVOICE_WAKE_NO_SPEECH_MS`, `ALICEVOICE_WAKE_MAX_SECONDS`.
 `HERMES_HOME` (default `%LOCALAPPDATA%\hermes`) locates the Hermes install.
 
 ## Logging

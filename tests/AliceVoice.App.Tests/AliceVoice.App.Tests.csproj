@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\AliceVoice.Core\AliceVoice.Core.csproj" />
+    <ProjectReference Include="..\..\src\AliceVoice.Inference\AliceVoice.Inference.csproj" />
   </ItemGroup>
 
 </Project>

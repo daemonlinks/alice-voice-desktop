@@ -1,0 +1,35 @@
+{
+  "//": "Alice Voice wake-word models (openWakeWord). Every file is verified against its SHA-256 before loading. All models here are CC BY-NC-SA 4.0 (non-commercial) - see NOTICE.md.",
+  "default": "hey_alice",
+  "melspectrogram": {
+    "file": "melspectrogram.onnx",
+    "sha256": "BA2B0E0F8B7B875369A2C89CB13360FF53BAC436F2895CCED9F479FA65EB176F"
+  },
+  "embedding": {
+    "file": "embedding_model.onnx",
+    "sha256": "70D164290C1D095D1D4EE149BC5E00543250A7316B59F31D056CFF7BD3075C1F"
+  },
+  "models": [
+    {
+      "id": "hey_alice",
+      "phrase": "hey alice",
+      "file": "hey_alice_v0.1.onnx",
+      "sha256": "64720ED83FADE6C77078E9F48FB647F248085C9675B10CC4FD1597F4BAC5A8C7",
+      "threshold": 0.5,
+      "patience": 3,
+      "interim": false,
+      "license": "CC BY-NC-SA 4.0",
+      "source": "trained in-house with tools/wakeword-training (Piper synthetic speech + openWakeWord ACAV100M negative features)"
+    },
+    {
+      "id": "hey_jarvis",
+      "phrase": "hey jarvis",
+      "file": "hey_jarvis_v0.1.onnx",
+      "sha256": "94A13CFE60075B132F6A472E7E462E8123EE70861BC3FB58434A73712EE0D2CB",
+      "threshold": 0.5,
+      "interim": true,
+      "license": "CC BY-NC-SA 4.0",
+      "source": "https://github.com/dscripka/openWakeWord/releases/tag/v0.5.1"
+    }
+  ]
+}

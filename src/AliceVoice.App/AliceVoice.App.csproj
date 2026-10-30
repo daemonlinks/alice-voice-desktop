@@ -31,6 +31,7 @@
   <ItemGroup>
     <ProjectReference Include="..\AliceVoice.Core\AliceVoice.Core.csproj" />
     <ProjectReference Include="..\AliceVoice.Audio\AliceVoice.Audio.csproj" />
+    <ProjectReference Include="..\AliceVoice.Inference\AliceVoice.Inference.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -41,6 +42,14 @@
        any launch location, not only from inside the repo. -->
   <ItemGroup>
     <None Include="..\..\scripts\*.py" Link="scripts\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- Wake-word models (openWakeWord ONNX + manifest with SHA-256s) ship in
+       models\wakeword next to the exe. Pretrained models: CC BY-NC-SA 4.0. -->
+  <ItemGroup>
+    <None Include="..\..\models\wakeword\**\*" Link="models\wakeword\%(RecursiveDir)%(Filename)%(Extension)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

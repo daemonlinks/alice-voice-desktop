@@ -53,6 +53,33 @@ public sealed class AliceVoiceOptions
 
     public string? UpdateManifestUrl { get; set; }
 
+    // ── Wake word (openWakeWord) ─────────────────────────────────────────
+
+    /// <summary>Folder with wakeword-models.json + ONNX files (ALICEVOICE_WAKEWORD_DIR).
+    /// Default search: %ProgramData%\AliceVoice\wakeword, then models\wakeword next to the exe.</summary>
+    public string? WakeWordDir { get; set; }
+
+    /// <summary>Wake-word model id from the manifest, e.g. hey_jarvis (ALICEVOICE_WAKEWORD_MODEL). Default: manifest default.</summary>
+    public string? WakeWordModel { get; set; }
+
+    /// <summary>Detection threshold 0..1 (ALICEVOICE_WAKEWORD_THRESHOLD). Default: the model's (0.5). UI sensitivity = 1 - threshold.</summary>
+    public float? WakeWordThreshold { get; set; }
+
+    /// <summary>Consecutive 80 ms frames above threshold needed (ALICEVOICE_WAKEWORD_PATIENCE). Default: the model's manifest value (1 if unset).</summary>
+    public int? WakeWordPatience { get; set; }
+
+    /// <summary>Silence that ends the command after the wake word, ms (ALICEVOICE_WAKE_END_SILENCE_MS). Default 900.</summary>
+    public int? WakeEndSilenceMs { get; set; }
+
+    /// <summary>RMS (0..1) that counts as speech for end-of-speech detection (ALICEVOICE_WAKE_SPEECH_RMS). Default 0.015.</summary>
+    public float? WakeSpeechRms { get; set; }
+
+    /// <summary>Give up if nothing is said this long after the wake word, ms (ALICEVOICE_WAKE_NO_SPEECH_MS). Default 5000.</summary>
+    public int? WakeNoSpeechTimeoutMs { get; set; }
+
+    /// <summary>Longest command after the wake word, seconds (ALICEVOICE_WAKE_MAX_SECONDS). Default 30.</summary>
+    public int? WakeMaxUtteranceSeconds { get; set; }
+
     // ── Resolved values (defaults applied) ──────────────────────────────
 
     [JsonIgnore] public string LocalAppData => Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
@@ -72,6 +99,11 @@ public sealed class AliceVoiceOptions
     [JsonIgnore] public string ResolvedSttComputeType => SttComputeType ?? "int8_float32";
     [JsonIgnore] public string ResolvedSttCpuModel => SttCpuModel ?? "base";
     [JsonIgnore] public string ResolvedUpdateManifestUrl => UpdateManifestUrl ?? "https://raw.githubusercontent.com/daemonlinks/alice-voice-desktop/main/version.json";
+    [JsonIgnore] public int ResolvedWakeWordPatience => Math.Max(1, WakeWordPatience ?? 1);
+    [JsonIgnore] public int ResolvedWakeEndSilenceMs => Math.Clamp(WakeEndSilenceMs ?? 900, 200, 5000);
+    [JsonIgnore] public float ResolvedWakeSpeechRms => Math.Clamp(WakeSpeechRms ?? 0.015f, 0.001f, 0.5f);
+    [JsonIgnore] public int ResolvedWakeNoSpeechTimeoutMs => Math.Clamp(WakeNoSpeechTimeoutMs ?? 5000, 1000, 30000);
+    [JsonIgnore] public int ResolvedWakeMaxUtteranceSeconds => Math.Clamp(WakeMaxUtteranceSeconds ?? 30, 3, 120);
     [JsonIgnore] public string LogsDir => Path.Combine(AppDataDir, "logs");
     [JsonIgnore] public string CrashDir => Path.Combine(AppDataDir, "crash");
 
@@ -113,6 +145,14 @@ public sealed class AliceVoiceOptions
         o.SttCpuModel = Env(env, "ALICEVOICE_STT_CPU_MODEL") ?? o.SttCpuModel;
         o.UpdateManifestUrl = Env(env, "ALICEVOICE_UPDATE_URL") ?? o.UpdateManifestUrl;
         if (int.TryParse(Env(env, "ALICEVOICE_STT_GPU"), out var gi)) o.SttGpuIndex = gi;
+        o.WakeWordDir = Env(env, "ALICEVOICE_WAKEWORD_DIR") ?? o.WakeWordDir;
+        o.WakeWordModel = Env(env, "ALICEVOICE_WAKEWORD_MODEL") ?? o.WakeWordModel;
+        if (float.TryParse(Env(env, "ALICEVOICE_WAKEWORD_THRESHOLD"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var wt)) o.WakeWordThreshold = wt;
+        if (int.TryParse(Env(env, "ALICEVOICE_WAKEWORD_PATIENCE"), out var wp)) o.WakeWordPatience = wp;
+        if (int.TryParse(Env(env, "ALICEVOICE_WAKE_END_SILENCE_MS"), out var ws)) o.WakeEndSilenceMs = ws;
+        if (float.TryParse(Env(env, "ALICEVOICE_WAKE_SPEECH_RMS"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var wr)) o.WakeSpeechRms = wr;
+        if (int.TryParse(Env(env, "ALICEVOICE_WAKE_NO_SPEECH_MS"), out var wn)) o.WakeNoSpeechTimeoutMs = wn;
+        if (int.TryParse(Env(env, "ALICEVOICE_WAKE_MAX_SECONDS"), out var wm)) o.WakeMaxUtteranceSeconds = wm;
         return o;
     }
 

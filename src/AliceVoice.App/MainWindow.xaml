@@ -192,12 +192,14 @@
                     <Button x:Name="SendButton" Content="Send" Click="SendButton_Click" VerticalAlignment="Center"/>
                 </StackPanel>
 
-                <!-- Wake sensitivity -->
+                <!-- Wake word (Wake mode): active wake word, sensitivity, live score -->
                 <StackPanel x:Name="WakeRow" Orientation="Horizontal" Spacing="10" Visibility="Collapsed">
+                    <TextBlock x:Name="WakeWordLabel" Text="Wake word: —" Foreground="{StaticResource AppText}" FontSize="12" VerticalAlignment="Center"/>
                     <TextBlock Text="Sensitivity:" Foreground="{StaticResource AppTextDim}" FontSize="12" VerticalAlignment="Center"/>
-                    <Slider x:Name="WakeSensitivity" Minimum="0.1" Maximum="0.9" StepFrequency="0.05" Value="0.45"
+                    <Slider x:Name="WakeSensitivity" Minimum="0.1" Maximum="0.9" StepFrequency="0.05" Value="0.5"
                             Width="180" VerticalAlignment="Center" ValueChanged="WakeSensitivity_ValueChanged"/>
-                    <TextBlock x:Name="SensitivityValue" Text="0.45" Foreground="{StaticResource AppTextDim}" FontSize="12" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="SensitivityValue" Text="0.50 (threshold 0.50)" Foreground="{StaticResource AppTextDim}" FontSize="12" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="WakeScoreText" Text="" Foreground="{StaticResource AppTextDim}" FontSize="11" VerticalAlignment="Center"/>
                 </StackPanel>
 
                 <!-- PTT (Talk) -->

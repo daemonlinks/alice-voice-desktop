@@ -22,3 +22,6 @@ LocalAppData/
 .vs/
 .idea/
 *.swp
+
+__pycache__/
+*.pyc
