@@ -1,2 +1,3 @@
 *.onnx binary
 *.wav binary
+*.p7s binary
