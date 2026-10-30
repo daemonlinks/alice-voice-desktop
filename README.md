@@ -201,6 +201,12 @@ store; the tool only asks the store to sign.
    LF form.
 4. Commit `version.json` and `version.json.p7s` together (via PR). Any later
    content edit to `version.json` invalidates the signature; re-run step 3.
+   `RepoManifestSignatureTests` fails the test run if the committed pair does
+   not verify against the production root.
+
+Current signing certificate: `CN=AHC` (`daemonlinks\ahc`), thumbprint
+`9F5116C32A280552E38F7FA87967EDED6C9C34C2`, valid until 2028-10-29 21:03 UTC.
+Renew before then (step 1) and re-sign.
 
 ## Build
 
