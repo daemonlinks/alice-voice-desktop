@@ -1,0 +1,40 @@
+{
+  "validation_hours": 10.7,
+  "thresholds": {
+    "0.3": {
+      "recall_heldout_synth": 0.9499,
+      "synth_negative_fpr": 0.0445,
+      "false_accepts_per_hour": 23.092
+    },
+    "0.4": {
+      "recall_heldout_synth": 0.9476,
+      "synth_negative_fpr": 0.04388,
+      "false_accepts_per_hour": 21.783
+    },
+    "0.5": {
+      "recall_heldout_synth": 0.9454,
+      "synth_negative_fpr": 0.04203,
+      "false_accepts_per_hour": 20.568
+    },
+    "0.6": {
+      "recall_heldout_synth": 0.9431,
+      "synth_negative_fpr": 0.04141,
+      "false_accepts_per_hour": 19.259
+    },
+    "0.7": {
+      "recall_heldout_synth": 0.937,
+      "synth_negative_fpr": 0.04079,
+      "false_accepts_per_hour": 18.137
+    },
+    "0.8": {
+      "recall_heldout_synth": 0.934,
+      "synth_negative_fpr": 0.03894,
+      "false_accepts_per_hour": 16.174
+    },
+    "0.9": {
+      "recall_heldout_synth": 0.9279,
+      "synth_negative_fpr": 0.0377,
+      "false_accepts_per_hour": 14.117
+    }
+  }
+}

@@ -12,6 +12,8 @@ using AliceVoice.Core.Config;
 using AliceVoice.Core.Stt;
 using AliceVoice.Core.Updates;
 using AliceVoice.Core.Voice;
+using AliceVoice.Core.WakeWord;
+using AliceVoice.Inference.WakeWord;
 using System.Diagnostics;
 using System.Text.Json;
 
@@ -35,6 +37,10 @@ public sealed partial class MainWindow : Window
     private bool _micRunning;
     private float _vuLevel;
     private DispatcherQueueTimer? _vuTimer;
+
+    // ── Wake word: hands-free listening (null when no model is installed) ──
+    private WakeWordService? _wake;
+    private int _wakeBusy; // >0 while recording, transcribing, thinking or speaking: detection paused
 
     // ── Turn state ──
     private CancellationTokenSource? _turnCts;
@@ -110,8 +116,7 @@ public sealed partial class MainWindow : Window
             VoiceProviderSelect.Items.Add(new ComboBoxItem { Content = p.DisplayName, Tag = p.Kind });
 
         // Controls that have no implementation yet are disabled, with a reason.
-        ModeWakeBtn.IsEnabled = false;
-        ToolTipService.SetToolTip(ModeWakeBtn, "Wake word is not implemented yet — use PTT or Text.");
+        InitWakeWord();
         foreach (var s in new[] { CtxPointsSlider, CtxHonchoSlider, CtxCharsSlider })
         {
             s.IsEnabled = false;
@@ -412,6 +417,7 @@ public sealed partial class MainWindow : Window
         PStageTts.Foreground = Res("AppGreen");
         try
         {
+            using var busy = WakeBusy(); // never let Alice's own voice trigger the wake word
             await _voiceProvider.SpeakAsync(new VoiceProfile(provider, voice), "Hello Master. This is a voice quality test.");
             StatusText.Text = "Ready";
             SetActivity("Ready");
@@ -427,7 +433,7 @@ public sealed partial class MainWindow : Window
 
     // ── Modes ──
     private void ModePtt_Click(object sender, RoutedEventArgs e) => SetMode("ptt");
-    private void ModeWake_Click(object sender, RoutedEventArgs e) => SetMode("ptt"); // wake word not implemented (button disabled)
+    private void ModeWake_Click(object sender, RoutedEventArgs e) => SetMode(_wake is null ? "ptt" : "wake");
     private void ModeText_Click(object sender, RoutedEventArgs e) => SetMode("text");
     private void ModeSoul_Click(object sender, RoutedEventArgs e)
     {
@@ -443,26 +449,32 @@ public sealed partial class MainWindow : Window
 
     private void SetMode(string mode)
     {
+        if (mode == "wake" && _wake is null) mode = "ptt";
         if (mode != "soul" && _mode != "soul") _lastNonSoulMode = mode;
+        var wasWake = _mode == "wake";
         _mode = mode;
         ModePttBtn.Style = (Style)Application.Current.Resources[mode == "ptt" ? "ChipButtonActive" : "ChipButton"];
-        ModeWakeBtn.Style = (Style)Application.Current.Resources["ChipButton"];
+        ModeWakeBtn.Style = (Style)Application.Current.Resources[mode == "wake" ? "ChipButtonActive" : "ChipButton"];
         ModeTextBtn.Style = (Style)Application.Current.Resources[mode == "text" ? "ChipButtonActive" : "ChipButton"];
         ModeSoulBtn.Style = (Style)Application.Current.Resources[mode == "soul" ? "ChipButtonActive" : "ChipButton"];
 
         TranscriptScroll.Visibility = mode == "soul" ? Visibility.Collapsed : Visibility.Visible;
         SoulEditor.Visibility = mode == "soul" ? Visibility.Visible : Visibility.Collapsed;
         TextInputRow.Visibility = mode == "text" ? Visibility.Visible : Visibility.Collapsed;
-        WakeRow.Visibility = Visibility.Collapsed;
-        PttRow.Visibility = mode == "ptt" ? Visibility.Visible : Visibility.Collapsed;
+        WakeRow.Visibility = mode == "wake" ? Visibility.Visible : Visibility.Collapsed;
+        // Push-to-talk keeps working in wake mode.
+        PttRow.Visibility = mode is "ptt" or "wake" ? Visibility.Visible : Visibility.Collapsed;
 
         if (mode == "soul") _ = LoadSoulAsync();
-        if (mode != "ptt" && _ptt.Current != PushToTalkGesture.State.Idle)
+        if (mode is not ("ptt" or "wake") && _ptt.Current != PushToTalkGesture.State.Idle)
         {
             _ptt.Reset();
             _utterance.Cancel();
+            TalkButton.Content = "🎤 Talk";
             _ = StopMicAsync();
         }
+        if (mode == "wake" && !wasWake) _ = StartWakeListeningAsync();
+        else if (mode != "wake" && wasWake) _ = StopWakeListeningAsync();
         AddLog($"Mode: {mode}");
     }
 
@@ -542,11 +554,160 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    // ── Wake sensitivity (wake word not implemented; row hidden) ──
+    // ── Wake word ──
+    /// <summary>Sensitivity = 1 - detection threshold (higher = triggers more easily).</summary>
     private void WakeSensitivity_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
+        var threshold = (float)Math.Round(1 - e.NewValue, 2);
         if (SensitivityValue is not null)
-            SensitivityValue.Text = e.NewValue.ToString("0.00");
+            SensitivityValue.Text = $"{e.NewValue:0.00} (threshold {threshold:0.00})";
+        if (_wake is not null) _wake.Session.Threshold = threshold;
+    }
+
+    /// <summary>Load the wake-word model if one is installed; otherwise Wake stays disabled with the reason.</summary>
+    private void InitWakeWord()
+    {
+        var model = WakeWordModelLocator.TryResolve(_options.WakeWordDir, _options.SharedDataDir, _options.WakeWordModel, out var reason);
+        if (model is null)
+        {
+            DisableWake(reason);
+            return;
+        }
+        try
+        {
+            var threshold = Math.Clamp(_options.WakeWordThreshold ?? model.Entry.Threshold, 0.1f, 0.9f);
+            var session = new WakeWordSession(OnnxWakeWordFactory.CreateDetector(model), new WakeWordSessionSettings
+            {
+                Threshold = threshold,
+                Patience = Math.Max(1, _options.WakeWordPatience ?? model.Entry.Patience),
+                EndOfSpeech = new EndOfSpeechSettings
+                {
+                    SpeechRms = _options.ResolvedWakeSpeechRms,
+                    EndSilenceMs = _options.ResolvedWakeEndSilenceMs,
+                    NoSpeechTimeoutMs = _options.ResolvedWakeNoSpeechTimeoutMs,
+                    MaxUtteranceMs = _options.ResolvedWakeMaxUtteranceSeconds * 1000,
+                },
+            });
+            _wake = new WakeWordService(session, model);
+            session.WakeDetected += score => DispatcherQueue.TryEnqueue(() => OnWakeDetected(score));
+            session.UtteranceReady += pcm => DispatcherQueue.TryEnqueue(() => _ = OnWakeUtteranceAsync(pcm));
+            session.UtteranceAbandoned += _ => DispatcherQueue.TryEnqueue(OnWakeAbandoned);
+            _wake.Faulted += ex => DispatcherQueue.TryEnqueue(() =>
+            {
+                Log.Error(ex, "Wake-word inference failed");
+                ShowError($"Wake word stopped: {ex.Message}");
+                if (_mode == "wake") SetMode("ptt");
+            });
+
+            WakeSensitivity.Value = Math.Clamp(1 - threshold, 0.1, 0.9);
+            WakeWordLabel.Text = $"Wake word: “{model.Phrase}”{(model.Interim ? " (interim test model)" : "")}";
+            ToolTipService.SetToolTip(ModeWakeBtn,
+                $"Hands-free: say “{model.Phrase}”, then your request; a pause ends it. Model: {model.Id}" +
+                (model.Interim ? " — interim test model until the Alice wake word is installed." : "."));
+            Log.Information("Wake word ready: {Model} (“{Phrase}”) from {Dir}, threshold {Threshold}",
+                model.Id, model.Phrase, model.Directory, threshold);
+        }
+        catch (Exception ex)
+        {
+            _wake?.Dispose();
+            _wake = null;
+            Log.Warning(ex, "Wake-word engine failed to load");
+            DisableWake($"Wake-word engine failed to load: {ex.Message}");
+        }
+    }
+
+    private void DisableWake(string reason)
+    {
+        ModeWakeBtn.IsEnabled = false;
+        ToolTipService.SetToolTip(ModeWakeBtn, $"Wake word unavailable — {reason}");
+        Log.Information("Wake word unavailable: {Reason}", reason);
+    }
+
+    private string WakePhrase => _wake is null ? "" : $"“{_wake.Model.Phrase}”";
+
+    private async Task StartWakeListeningAsync()
+    {
+        if (_wake is null) return;
+        try
+        {
+            await EnsureMicDeviceAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowError($"Microphone error: {ex.Message}");
+            Log.Error(ex, "Wake mode could not open the microphone");
+            SetMode("ptt");
+            return;
+        }
+        ResumeWakeIfIdle();
+        if (_wakeBusy == 0)
+        {
+            StatusText.Text = $"Say {WakePhrase}…";
+            SetActivity("Ready", $"listening for {WakePhrase}");
+        }
+        AddLog($"Wake listening: {_wake.Model.Id}");
+    }
+
+    private async Task StopWakeListeningAsync()
+    {
+        _wake?.Session.Pause();
+        if (_ptt.Current == PushToTalkGesture.State.Idle) await StopMicAsync();
+    }
+
+    /// <summary>
+    /// Pause detection while recording / transcribing / thinking / speaking;
+    /// it resumes (with a short guard for room echo) when the last scope ends.
+    /// </summary>
+    private IDisposable WakeBusy()
+    {
+        _wakeBusy++;
+        _wake?.Session.Pause();
+        return new BusyScope(this);
+    }
+
+    private sealed class BusyScope(MainWindow w) : IDisposable
+    {
+        private bool _done;
+        public void Dispose()
+        {
+            if (_done) return;
+            _done = true;
+            w._wakeBusy = Math.Max(0, w._wakeBusy - 1);
+            w.ResumeWakeIfIdle();
+        }
+    }
+
+    private void ResumeWakeIfIdle()
+    {
+        if (_wake is null || _mode != "wake" || !_micRunning || _wakeBusy > 0) return;
+        if (_ptt.Current != PushToTalkGesture.State.Idle) return;
+        if (_wake.Session.State != WakeWordSessionState.Paused) return;
+        _wake.Session.Resume();
+        MicTag.Text = "🎤 Wake";
+    }
+
+    private void OnWakeDetected(float score)
+    {
+        if (_mode != "wake" || _wake is null) return;
+        AddLog($"Wake word {_wake.Model.Id} ({score:0.00})");
+        StatusText.Text = $"Heard {WakePhrase} — go ahead…";
+        SetActivity("Listening…", $"wake word {score:0.00}");
+        PStageMic.Foreground = Res("AppGreen");
+    }
+
+    private async Task OnWakeUtteranceAsync(short[] pcm)
+    {
+        using var busy = WakeBusy();
+        if (_mode != "wake") return;
+        AddLog($"Wake utterance {pcm.Length / 16000.0:F1}s");
+        await TranscribeAndReplyAsync(pcm);
+    }
+
+    private void OnWakeAbandoned()
+    {
+        if (_mode != "wake") return;
+        StatusText.Text = $"Didn't hear a request — say {WakePhrase} again";
+        SetActivity("Ready", $"listening for {WakePhrase}");
     }
 
     // ── Tuning ──
@@ -667,11 +828,18 @@ public sealed partial class MainWindow : Window
     {
         var rms = _utterance.Append(pcm16k);
         _vuLevel = Math.Max(_vuLevel * 0.6f, rms);
+        if (_mode == "wake") _wake?.Enqueue(pcm16k); // inference runs on the wake worker, not here
     }
 
     private async Task StartMicAsync()
     {
         _utterance.Start();
+        await EnsureMicDeviceAsync();
+    }
+
+    /// <summary>Open the microphone (if not already) and start the meter.</summary>
+    private async Task EnsureMicDeviceAsync()
+    {
         if (!_micRunning)
         {
             await _mic.StartAsync();
@@ -686,6 +854,12 @@ public sealed partial class MainWindow : Window
 
     private async Task StopMicAsync()
     {
+        if (_mode == "wake" && _wake is not null)
+        {
+            // Wake mode keeps the device open; only the push-to-talk recording ended.
+            MicTag.Text = "🎤 Wake";
+            return;
+        }
         _vuTimer?.Stop();
         _vuLevel = 0;
         VuFill.Width = 0;
@@ -709,6 +883,16 @@ public sealed partial class MainWindow : Window
             var db = 20 * Math.Log10(Math.Max(_vuLevel, 1e-5));
             VuFill.Width = Math.Clamp((db + 40) / 40 * 100, 0, 100);
             _vuLevel *= 0.85f;
+            if (_mode == "wake" && _wake is not null && WakeScoreText is not null)
+            {
+                var st = _wake.Session.State;
+                WakeScoreText.Text = st switch
+                {
+                    WakeWordSessionState.Listening => $"score {_wake.Session.LastScore:0.00}",
+                    WakeWordSessionState.Capturing => "recording…",
+                    _ => "paused",
+                };
+            }
             if (_utterance.IsFull)
             {
                 AddLog("Recording cap (120 s) reached — sending");
@@ -755,6 +939,7 @@ public sealed partial class MainWindow : Window
                 case PttAction.StartRecording:
                     // Talking over Alice interrupts her and cancels the turn in flight.
                     CancelTurn();
+                    _wake?.Session.Pause(); // push-to-talk wins over the wake word
                     await StartMicAsync();
                     TalkButton.Content = _ptt.Current == PushToTalkGesture.State.Latched ? "■ Send" : "🎤 Release to send";
                     StatusText.Text = "Listening…";
@@ -776,11 +961,13 @@ public sealed partial class MainWindow : Window
             TalkButton.Content = "🎤 Talk";
             ShowError($"Microphone error: {ex.Message}");
             Log.Error(ex, "PTT failed");
+            ResumeWakeIfIdle();
         }
     }
 
     private async Task FinishUtteranceAsync()
     {
+        using var busy = WakeBusy();
         var pcm = _utterance.Stop();
         await StopMicAsync();
         TalkButton.Content = "🎤 Talk";
@@ -790,7 +977,12 @@ public sealed partial class MainWindow : Window
             SetActivity("Ready");
             return;
         }
+        await TranscribeAndReplyAsync(pcm);
+    }
 
+    /// <summary>Speech → text → reply; shared by push-to-talk and the wake word.</summary>
+    private async Task TranscribeAndReplyAsync(short[] pcm)
+    {
         var turn = BeginTurn();
         var ct = turn.Token;
         StatusText.Text = "Transcribing…";
@@ -867,6 +1059,7 @@ public sealed partial class MainWindow : Window
     /// <summary>One conversational turn: LLM (streamed for Alice LOCAL) then speech.</summary>
     private async Task RunTurnAsync(string text, long sttMs, CancellationTokenSource turn)
     {
+        using var busy = WakeBusy(); // Alice's reply must not trigger the wake word
         var ct = turn.Token;
         var myTurn = _turnId;
         var target = TargetDisplayName;
@@ -1195,6 +1388,8 @@ public sealed partial class MainWindow : Window
             _errorTimer?.Stop();
             _mic.AudioFrameCaptured -= OnMicFrame;
             _voice.EventReceived -= OnVoiceEvent;
+            _wake?.Dispose();
+            _wake = null;
         }
         catch (Exception ex) { Log.Warning(ex, "Window close cleanup failed"); }
     }
