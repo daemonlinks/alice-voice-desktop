@@ -1,0 +1,1 @@
+Wake-word models are linked from the repo models/wakeword folder at build time.

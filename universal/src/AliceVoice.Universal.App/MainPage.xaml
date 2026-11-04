@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="AliceVoice.AppU.MainPage"
+             BackgroundColor="{StaticResource AppBg}"
+             Title="Alice Voice App U">
+    <Grid RowDefinitions="Auto,Auto,* ,Auto" Padding="0">
+        <Grid Grid.Row="0" Padding="12,8" ColumnDefinitions="*,Auto" BackgroundColor="#B30A0A0F">
+            <VerticalStackLayout Spacing="0">
+                <Label Text="Alice Voice App U" FontSize="20" FontAttributes="Bold" />
+                <HorizontalStackLayout Spacing="6">
+                    <BoxView x:Name="PresenceDot" WidthRequest="8" HeightRequest="8" CornerRadius="4" Color="{StaticResource AppGreen}" VerticalOptions="Center" />
+                    <Label x:Name="PresenceText" Text="here with you" Style="{StaticResource Dim}" />
+                    <Label x:Name="BrandBadge" Text="v0.1.0 · yours" TextColor="Black" BackgroundColor="{StaticResource AppAccent}" Padding="6,1" FontSize="10" />
+                </HorizontalStackLayout>
+            </VerticalStackLayout>
+            <HorizontalStackLayout Grid.Column="1" Spacing="6" VerticalOptions="Center">
+                <Button x:Name="ConnectButton" Text="Connect" Style="{StaticResource Chip}" Clicked="OnConnect" />
+                <Button Text="↺" Style="{StaticResource Chip}" Clicked="OnReset" />
+            </HorizontalStackLayout>
+        </Grid>
+
+        <VerticalStackLayout Grid.Row="1" Padding="12,6" Spacing="4" BackgroundColor="#B30A0A0F">
+            <HorizontalStackLayout Spacing="8">
+                <BoxView x:Name="ActivityDot" WidthRequest="8" HeightRequest="8" CornerRadius="4" Color="{StaticResource AppTextDim}" VerticalOptions="Center" />
+                <Label x:Name="ActivityLine" Text="Ready" FontAttributes="Bold" />
+                <Label x:Name="ActivityDetail" Text="" Style="{StaticResource Dim}" LineBreakMode="TailTruncation" />
+            </HorizontalStackLayout>
+            <Label x:Name="StatusLine" Text="Agent: Alice LOCAL" Style="{StaticResource Dim}" LineBreakMode="WordWrap" />
+            <Label x:Name="UpdateBanner" Text="" TextColor="{StaticResource AppYellow}" IsVisible="False" LineBreakMode="WordWrap" />
+            <Border x:Name="ErrorBanner" IsVisible="False" BackgroundColor="#1A0A0A" Stroke="{StaticResource AppRed}" Padding="8,4">
+                <Grid ColumnDefinitions="*,Auto">
+                    <Label x:Name="ErrorText" TextColor="{StaticResource AppRed}" LineBreakMode="WordWrap" />
+                    <Button Grid.Column="1" Text="✕" Style="{StaticResource Chip}" Clicked="OnDismissError" />
+                </Grid>
+            </Border>
+        </VerticalStackLayout>
+
+        <ScrollView Grid.Row="2" x:Name="TranscriptScroll">
+            <VerticalStackLayout x:Name="TranscriptPanel" Padding="12,8" Spacing="8" />
+        </ScrollView>
+
+        <Grid Grid.Row="2" x:Name="SoulEditor" IsVisible="False" Padding="12,8" RowDefinitions="*,Auto">
+            <Editor x:Name="SoulText" BackgroundColor="{StaticResource AppSurface}" TextColor="{StaticResource AppText}" />
+            <HorizontalStackLayout Grid.Row="1" Spacing="8" Margin="0,8,0,0">
+                <Button Text="Save SOUL" Style="{StaticResource Chip}" Clicked="OnSaveSoul" />
+                <Button Text="Close" Style="{StaticResource Chip}" Clicked="OnCloseSoul" />
+                <Label x:Name="SoulStatus" Style="{StaticResource Dim}" VerticalOptions="Center" LineBreakMode="WordWrap" />
+            </HorizontalStackLayout>
+        </Grid>
+
+        <ScrollView Grid.Row="3" MaximumHeightRequest="360">
+            <VerticalStackLayout Padding="12,8" Spacing="8">
+                <HorizontalStackLayout Spacing="6">
+                    <Picker x:Name="AgentPicker" Title="Agent" WidthRequest="180" TextColor="{StaticResource AppText}" SelectedIndexChanged="OnAgentChanged" />
+                    <Picker x:Name="ProviderPicker" Title="Provider" WidthRequest="140" TextColor="{StaticResource AppText}" SelectedIndexChanged="OnProviderChanged" />
+                    <Picker x:Name="VoicePicker" Title="Voice" WidthRequest="160" TextColor="{StaticResource AppText}" SelectedIndexChanged="OnVoiceChanged" />
+                    <Button Text="Test TTS" Style="{StaticResource Chip}" Clicked="OnTestTts" />
+                </HorizontalStackLayout>
+
+                <HorizontalStackLayout Spacing="4">
+                    <Button x:Name="ModePtt" Text="PTT" Style="{StaticResource Chip}" Clicked="OnMode" />
+                    <Button x:Name="ModeWake" Text="Wake" Style="{StaticResource Chip}" Clicked="OnMode" />
+                    <Button x:Name="ModeText" Text="Text" Style="{StaticResource Chip}" Clicked="OnMode" />
+                    <Button x:Name="ModeSoul" Text="SOUL" Style="{StaticResource Chip}" Clicked="OnMode" />
+                    <Button x:Name="MoodNatural" Text="natural" Style="{StaticResource Chip}" Clicked="OnMood" />
+                    <Button x:Name="MoodComfort" Text="comfort" Style="{StaticResource Chip}" Clicked="OnMood" />
+                    <Button x:Name="MoodPlayful" Text="playful" Style="{StaticResource Chip}" Clicked="OnMood" />
+                    <Button x:Name="MoodFlirty" Text="flirty" Style="{StaticResource Chip}" Clicked="OnMood" />
+                    <Button x:Name="MoodFocused" Text="focused" Style="{StaticResource Chip}" Clicked="OnMood" />
+                </HorizontalStackLayout>
+
+                <HorizontalStackLayout Spacing="8">
+                    <Border WidthRequest="100" HeightRequest="5" BackgroundColor="{StaticResource AppSurface}" StrokeThickness="0">
+                        <BoxView x:Name="VuFill" HeightRequest="5" WidthRequest="0" Color="{StaticResource AppGreen}" HorizontalOptions="Start" />
+                    </Border>
+                    <Label x:Name="MicTag" Text="🎤 Off" TextColor="{StaticResource AppRed}" />
+                    <Button Text="◀" Style="{StaticResource Chip}" Clicked="OnPrevBg" />
+                    <Button Text="R" Style="{StaticResource Chip}" Clicked="OnRandBg" />
+                    <Button Text="▶" Style="{StaticResource Chip}" Clicked="OnNextBg" />
+                </HorizontalStackLayout>
+
+                <HorizontalStackLayout x:Name="TextRow" Spacing="8" IsVisible="False">
+                    <Entry x:Name="ChatInput" Placeholder="Type and press Enter…" HorizontalOptions="FillAndExpand" Style="{StaticResource Field}" Completed="OnSend" />
+                    <Button Text="Send" Style="{StaticResource Chip}" Clicked="OnSend" />
+                </HorizontalStackLayout>
+
+                <VerticalStackLayout x:Name="WakeRow" IsVisible="False" Spacing="4">
+                    <Label x:Name="WakeWordLabel" Text="Wake word: —" />
+                    <HorizontalStackLayout Spacing="8">
+                        <Label Text="Sensitivity:" Style="{StaticResource Dim}" VerticalOptions="Center" />
+                        <Slider x:Name="WakeSensitivity" Minimum="0.1" Maximum="0.9" Value="0.5" WidthRequest="180" ValueChanged="OnSensitivity" />
+                        <Label x:Name="SensitivityValue" Text="0.50 (threshold 0.50)" Style="{StaticResource Dim}" VerticalOptions="Center" />
+                        <Label x:Name="WakeScore" Text="" Style="{StaticResource Dim}" VerticalOptions="Center" />
+                    </HorizontalStackLayout>
+                </VerticalStackLayout>
+
+                <HorizontalStackLayout x:Name="PttRow" Spacing="8">
+                    <Button x:Name="TalkButton" Text="🎤 Talk" Style="{StaticResource Chip}" Pressed="OnTalkPressed" Released="OnTalkReleased" Clicked="OnTalkClicked" />
+                    <Label x:Name="StatusText" Text="Ready" Style="{StaticResource Dim}" VerticalOptions="Center" />
+                </HorizontalStackLayout>
+
+                <Button x:Name="LogToggle" Text="▸  Event Log" Style="{StaticResource Chip}" HorizontalOptions="Start" Clicked="OnToggleLog" />
+                <VerticalStackLayout x:Name="LogPanel" IsVisible="False" />
+                <Button Text="▸  Keywords &amp; Tools" Style="{StaticResource Chip}" HorizontalOptions="Start" Clicked="OnToggleHelp" />
+                <VerticalStackLayout x:Name="HelpPanel" IsVisible="False">
+                    <Label x:Name="HelpTriggers" Style="{StaticResource Dim}" LineBreakMode="WordWrap" />
+                    <Label x:Name="HelpTools" Style="{StaticResource Dim}" />
+                </VerticalStackLayout>
+                <Button Text="▸  Settings" Style="{StaticResource Chip}" HorizontalOptions="Start" Clicked="OnToggleSettings" />
+                <VerticalStackLayout x:Name="SettingsPanel" IsVisible="False" Spacing="4">
+                    <Label x:Name="SettingsModel" LineBreakMode="WordWrap" />
+                    <Label Text="Key points, memory items and char limit are not wired — the agent owns context injection." Style="{StaticResource Dim}" LineBreakMode="WordWrap" />
+                    <HorizontalStackLayout Spacing="8">
+                        <Label Text="Key points:" Style="{StaticResource Dim}" />
+                        <Slider Minimum="0" Maximum="10" Value="2" WidthRequest="140" IsEnabled="False" />
+                    </HorizontalStackLayout>
+                    <HorizontalStackLayout Spacing="8">
+                        <Label Text="Memory items:" Style="{StaticResource Dim}" />
+                        <Slider Minimum="0" Maximum="5" Value="1" WidthRequest="140" IsEnabled="False" />
+                    </HorizontalStackLayout>
+                    <HorizontalStackLayout Spacing="8">
+                        <Label Text="Char limit:" Style="{StaticResource Dim}" />
+                        <Slider Minimum="20" Maximum="300" Value="80" WidthRequest="140" IsEnabled="False" />
+                    </HorizontalStackLayout>
+                </VerticalStackLayout>
+                <Button Text="▸  Latency Metrics" Style="{StaticResource Chip}" HorizontalOptions="Start" Clicked="OnToggleMetrics" />
+                <VerticalStackLayout x:Name="MetricsPanel" IsVisible="False">
+                    <Label x:Name="MetricsLine" />
+                    <Label x:Name="MetricsSummary" Style="{StaticResource Dim}" />
+                    <Label x:Name="MetricsTable" Style="{StaticResource Dim}" />
+                </VerticalStackLayout>
+                <Button Text="▸  Tuning" Style="{StaticResource Chip}" HorizontalOptions="Start" Clicked="OnToggleTuning" />
+                <VerticalStackLayout x:Name="TuningPanel" IsVisible="False" Spacing="4">
+                    <HorizontalStackLayout Spacing="6">
+                        <Button x:Name="ProfQuick" Text="Quick" Style="{StaticResource Chip}" Clicked="OnProfile" />
+                        <Button x:Name="ProfNatural" Text="Natural" Style="{StaticResource Chip}" Clicked="OnProfile" />
+                        <Button x:Name="ProfFull" Text="Full" Style="{StaticResource Chip}" Clicked="OnProfile" />
+                        <Button x:Name="TtsAllTalk" Text="AllTalk (local)" Style="{StaticResource Chip}" Clicked="OnEngine" />
+                        <Button x:Name="TtsPiper" Text="Piper (local)" Style="{StaticResource Chip}" Clicked="OnEngine" />
+                    </HorizontalStackLayout>
+                    <Label x:Name="ProfHint" Style="{StaticResource Dim}" />
+                    <Label x:Name="TuningLast" Style="{StaticResource Dim}" />
+                </VerticalStackLayout>
+
+                <Grid ColumnDefinitions="*,Auto">
+                    <Label x:Name="FooterAuth" Style="{StaticResource Dim}" />
+                    <HorizontalStackLayout Grid.Column="1" Spacing="10">
+                        <Label x:Name="LlmMode" TextColor="{StaticResource AppGreen}" FontSize="11" />
+                        <Label x:Name="WsDisplay" Style="{StaticResource Dim}" />
+                    </HorizontalStackLayout>
+                </Grid>
+            </VerticalStackLayout>
+        </ScrollView>
+    </Grid>
+</ContentPage>
