@@ -27,7 +27,9 @@ public static class UniversalServices
         services.AddSingleton(options);
         services.AddSingleton<SoulReloadHub>();
         services.AddSingleton(new VoiceAssignmentStore(host.AssignmentPath));
-        services.AddSingleton<IAppUpdater>(_ => new HttpAppUpdater(options.ResolvedUpdateManifestUrl));
+        services.AddSingleton<IAppUpdater>(_ => new HttpAppUpdater(
+            options.ResolvedUpdateManifestUrl,
+            packagePreference: host.Kind == PlatformHostKind.Android ? UpdatePackagePreference.Android : UpdatePackagePreference.Windows));
 
         if (host.Kind == PlatformHostKind.Windows)
             AddWindowsBackends(services, host, options);
@@ -48,11 +50,14 @@ public static class UniversalServices
         services.AddSingleton<ISttClient>(sp => new FasterWhisperSttClient(options, sp.GetRequiredService<IGpuSelector>()));
         services.AddSingleton(new SoulStore(options));
         services.AddSingleton<ISoulGateway>(sp => new LocalSoulGateway(sp.GetRequiredService<SoulStore>()));
+        services.AddSingleton<SharedTranscript>();
+        services.AddSingleton<IAliceConversation>(sp => sp.GetRequiredService<SharedTranscript>());
         services.AddSingleton<IVoiceBackend>(sp =>
         {
-            var backend = new AliceLocalBackend(options);
-            sp.GetRequiredService<SoulReloadHub>().Register(backend.ReloadSoulAsync);
-            return backend;
+            var inner = new AliceLocalBackend(options);
+            var recording = new RecordingAliceLocalBackend(inner, sp.GetRequiredService<SharedTranscript>());
+            sp.GetRequiredService<SoulReloadHub>().Register(recording.ReloadSoulAsync);
+            return recording;
         });
         services.AddSingleton<IFleetChat>(_ => new HermesApiFleetChat(options.ResolvedHermesApiUrl));
         services.AddSingleton<IPiperSynth>(_ => new PiperSynth(options));
@@ -65,7 +70,10 @@ public static class UniversalServices
                 sp.GetRequiredService<IPiperSynth>(),
                 host.BridgeBindHost!,
                 host.BridgeBindPort!.Value,
-                sp.GetRequiredService<SoulReloadHub>()));
+                sp.GetRequiredService<SoulReloadHub>(),
+                () => sp.GetServices<IVoiceBackend>().First(b => b is RecordingAliceLocalBackend),
+                transcript: sp.GetRequiredService<SharedTranscript>(),
+                allowUnsafeBind: host.AllowUnsafeBridgeBind));
         }
     }
 
@@ -75,6 +83,7 @@ public static class UniversalServices
         if (host.Remote is { } remote)
         {
             services.AddSingleton(new BeastBridgeClient(remote));
+            services.AddSingleton<IAliceConversation>(sp => new RemoteAliceConversation(sp.GetRequiredService<BeastBridgeClient>()));
             services.AddSingleton<ISttClient>(sp => new RemoteSttClient(sp.GetRequiredService<BeastBridgeClient>()));
             services.AddSingleton<ISoulGateway>(sp => new RemoteSoulGateway(sp.GetRequiredService<BeastBridgeClient>()));
             services.AddSingleton<IVoiceBackend>(sp => new BridgeAliceLocalBackend(sp.GetRequiredService<BeastBridgeClient>()));
@@ -82,6 +91,7 @@ public static class UniversalServices
         }
         else
         {
+            services.AddSingleton<IAliceConversation>(_ => new SharedTranscript());
             services.AddSingleton<ISttClient, UnconfiguredRemoteSttClient>();
             services.AddSingleton<ISoulGateway, RefusingSoulGateway>();
             services.AddSingleton<IVoiceBackend, UnconfiguredAliceLocalBackend>();

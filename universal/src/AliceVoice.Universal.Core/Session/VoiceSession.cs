@@ -27,6 +27,10 @@ public sealed class TranscriptEntry
     public bool ShowRemember { get; set; }
     public bool RememberEnabled { get; set; }
     public string RememberLabel { get; set; } = "♥ remember";
+    /// <summary>Set on bubbles that belong to the shared Alice LOCAL conversation, so a refresh can replace them.</summary>
+    public long? SharedId { get; init; }
+    /// <summary>In-flight local bubble replaced when the canonical turn arrives.</summary>
+    public bool PendingShared { get; set; }
 }
 
 public sealed record SessionTarget(string Id, string DisplayName);
@@ -49,6 +53,7 @@ public sealed class VoiceSession : IAsyncDisposable
     private readonly ISoulGateway _soul;
     private readonly IWakeSource _wakeSource;
     private readonly VoiceAssignmentStore _assignments;
+    private readonly IAliceConversation? _conversation;
     private readonly SoulReloadHub? _hub;
     private readonly Func<DateTime> _clock;
     private readonly Func<DateTime> _local;
@@ -73,11 +78,12 @@ public sealed class VoiceSession : IAsyncDisposable
     private float _vuLevel;
     private string _lastNonSoulMode = "ptt";
     private DateTime _errorUntil;
+    private DateTime _nextConversationPoll;
     private Action? _stopSpeech;
 
     public VoiceSession(UniversalHost host, IVoiceBackendManager voice, IFleetChat chat, IVoiceProviderManager providers,
         IPcmMicrophone mic, IAppUpdater updater, ISoulGateway soul, IWakeSource wakeSource, VoiceAssignmentStore assignments,
-        SoulReloadHub? hub = null, Func<DateTime>? clock = null, Func<DateTime>? localClock = null)
+        IAliceConversation? conversation = null, SoulReloadHub? hub = null, Func<DateTime>? clock = null, Func<DateTime>? localClock = null)
     {
         _host = host;
         _voice = voice;
@@ -88,7 +94,9 @@ public sealed class VoiceSession : IAsyncDisposable
         _soul = soul;
         _wakeSource = wakeSource;
         _assignments = assignments;
+        _conversation = conversation;
         _hub = hub;
+        if (_conversation is not null) _conversation.Changed += () => ApplySharedSnapshot();
         _clock = clock ?? (() => DateTime.UtcNow);
         _local = localClock ?? (() => DateTime.Now);
         _memberVoices = new Dictionary<string, VoiceProfile>(StringComparer.OrdinalIgnoreCase);
@@ -467,6 +475,11 @@ public sealed class VoiceSession : IAsyncDisposable
         {
             if (Error is not null && _clock() >= _errorUntil) { Error = null; clearError = true; }
         }
+        if (_conversation is { NeedsPoll: true } && _clock() >= _nextConversationPoll)
+        {
+            _nextConversationPoll = _clock().AddSeconds(2);
+            _ = PollConversationAsync();
+        }
         if (_utterance.IsFull && !_capNoted && _ptt.Current != PushToTalkGesture.State.Idle)
         {
             _capNoted = true;
@@ -586,7 +599,9 @@ public sealed class VoiceSession : IAsyncDisposable
         var myTurn = _turnId;
         var target = TargetName;
         var total = Stopwatch.StartNew();
-        Append(TranscriptKind.User, "You", $"{text} → {target}", showRemember: false);
+        var sharedLocal = IsAliceLocal && _conversation is not null;
+        var userLine = Append(TranscriptKind.User, "You", $"{text} → {target}", showRemember: false);
+        if (sharedLocal) userLine.PendingShared = true;
         StatusText = $"Talking to {target}…";
         SetActivity("Thinking…", text);
         LlmLamp = StageLamp.Yellow;
@@ -632,14 +647,28 @@ public sealed class VoiceSession : IAsyncDisposable
         llm.Stop();
         if (myTurn != _turnId) return;
 
-        if (_streamEntry is not null)
+        if (sharedLocal)
         {
-            _streamEntry.Text = reply;
-            _streamEntry.ShowRemember = true;
+            if (_conversation!.NeedsPoll)
+            {
+                try { await _conversation.RefreshAsync(ct); }
+                catch (Exception ex) { Log.Warning(ex, "Conversation refresh failed"); }
+            }
+            _streamTurnId = 0;
+            _streamEntry = null;
+            ApplySharedSnapshot();
         }
-        else Append(TranscriptKind.Alice, target, reply, showRemember: true);
-        _streamTurnId = 0;
-        _streamEntry = null;
+        else
+        {
+            if (_streamEntry is not null)
+            {
+                _streamEntry.Text = reply;
+                _streamEntry.ShowRemember = true;
+            }
+            else Append(TranscriptKind.Alice, target, reply, showRemember: true);
+            _streamTurnId = 0;
+            _streamEntry = null;
+        }
         LlmLamp = StageLamp.Green;
 
         long ttsMs = 0;
@@ -676,7 +705,11 @@ public sealed class VoiceSession : IAsyncDisposable
             case "reply_partial":
                 if (_streamTurnId != 0 && _streamTurnId == _turnId && evt.Text is { Length: > 0 } partial)
                 {
-                    if (_streamEntry is null) _streamEntry = Append(TranscriptKind.Alice, TargetName, partial, showRemember: false);
+                    if (_streamEntry is null)
+                    {
+                        _streamEntry = Append(TranscriptKind.Alice, TargetName, partial, showRemember: false);
+                        if (_conversation is not null && IsAliceLocal) _streamEntry.PendingShared = true;
+                    }
                     else _streamEntry.Text = partial;
                     LlmLamp = StageLamp.Green;
                     Touch();
@@ -720,16 +753,64 @@ public sealed class VoiceSession : IAsyncDisposable
 
     private async Task RestoreVoiceAsync()
     {
-        if (!_memberVoices.TryGetValue(SelectedTargetId, out var saved))
+        _memberVoices.TryGetValue(SelectedTargetId, out var saved);
+        var available = saved is not null && _providers.Providers.Any(p => p.Kind == saved.Provider);
+        if (!available)
         {
+            if (saved is not null)
+                AddLog($"Voice provider {saved.Provider} is not on this device; using the on-device default.");
             var fallback = _providers.Providers.FirstOrDefault(p => p.Kind == VoiceProviderKind.Sapi)?.Kind
                            ?? _providers.Providers.FirstOrDefault()?.Kind;
             if (fallback is { } kind) await SetProviderQuietAsync(kind, null);
             return;
         }
         _restoring = true;
-        try { await SetProviderQuietAsync(saved.Provider, saved.Voice); }
+        try { await SetProviderQuietAsync(saved!.Provider, saved.Voice); }
         finally { _restoring = false; }
+    }
+
+    private async Task PollConversationAsync()
+    {
+        if (_conversation is null) return;
+        try { await _conversation.RefreshAsync(); }
+        catch (Exception ex) { Log.Debug(ex, "Conversation refresh failed"); }
+    }
+
+    /// <summary>Replace Alice LOCAL bubbles with the canonical transcript. Other devices' turns show up here.</summary>
+    private void ApplySharedSnapshot()
+    {
+        if (_conversation is null) return;
+        var turns = _conversation.Snapshot();
+        lock (_gate)
+        {
+            _transcript.RemoveAll(e => e.SharedId is not null || e.PendingShared);
+            foreach (var turn in turns)
+            {
+                _turnSeq++;
+                var n = _turnSeq;
+                _transcript.Add(new TranscriptEntry
+                {
+                    Kind = TranscriptKind.User,
+                    Speaker = "You",
+                    Text = $"{turn.User} → Alice LOCAL",
+                    Turn = n,
+                    At = turn.At,
+                    SharedId = turn.Id
+                });
+                _transcript.Add(new TranscriptEntry
+                {
+                    Kind = TranscriptKind.Alice,
+                    Speaker = "Alice LOCAL",
+                    Text = turn.Assistant,
+                    Turn = n,
+                    At = turn.At,
+                    ShowRemember = true,
+                    RememberEnabled = true,
+                    SharedId = turn.Id
+                });
+            }
+        }
+        Touch();
     }
 
     private async Task SetProviderQuietAsync(VoiceProviderKind kind, string? voice)

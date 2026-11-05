@@ -12,12 +12,20 @@ public sealed record UpdateOffer(string Banner, bool CanInstall, string Reason)
 {
     public static UpdateOffer For(ReleaseInfo release, PlatformHostKind platform)
     {
+        if (platform == PlatformHostKind.Android && IsAndroidPackage(release.DownloadUrl))
+        {
+            return new UpdateOffer(
+                $"Update available: {release.Version} (Android APK)",
+                false,
+                "The signed manifest names this APK. App U shows the offer and does not download or install it by itself.");
+        }
+
         if (platform == PlatformHostKind.Android && IsWindowsPackage(release.DownloadUrl))
         {
             return new UpdateOffer(
                 $"Update {release.Version} is signed, but the manifest download is a Windows package. Android will not install it.",
                 false,
-                "version.json downloadUrl is an MSIX/APPX. An Android build needs its own https URL and sha256 inside the signed manifest (re-signed by the owner) before the phone can offer it.");
+                "version.json has no android entry yet. Add android.version, android.downloadUrl, and android.sha256 on the Beast and re-sign version.json.p7s.");
         }
 
         return new UpdateOffer(
@@ -35,4 +43,7 @@ public sealed record UpdateOffer(string Banner, bool CanInstall, string Reason)
             || path.EndsWith(".appx", StringComparison.OrdinalIgnoreCase)
             || path.EndsWith(".appxbundle", StringComparison.OrdinalIgnoreCase);
     }
+
+    public static bool IsAndroidPackage(string url)
+        => Uri.TryCreate(url, UriKind.Absolute, out var u) && u.AbsolutePath.EndsWith(".apk", StringComparison.OrdinalIgnoreCase);
 }

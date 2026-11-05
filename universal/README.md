@@ -49,21 +49,50 @@ dotnet run --project universal/src/AliceVoice.Universal.App -c Debug -f net10.0-
 The Windows package type is unpackaged, same as the WinUI app, so it can start
 `faster_whisper_stt.py` and write `%ProgramData%\AliceVoice\alice_local\SOUL.md`.
 
-To let the phone use this PC, set a Tailscale (or LAN) bind and start the app.
-There is no auth on the bridge. Do not bind it to a public address.
+The window and the phone share one Alice LOCAL conversation. The bridge process
+holds that history. A turn on the phone shows up in the window, and the other
+way around. Asks are serialized, so two devices cannot interleave one reply.
+
+### Bridge bind (Tailscale only)
+
+The bridge stays off until `ALICEVOICE_BRIDGE_BIND` (or `BridgeBind` in
+appsettings) is set. The value is `host:port`. By default the host must be a
+Tailscale address:
+
+- an IPv4 address in `100.64.0.0/10` (what `tailscale ip -4` prints on the Beast)
+- a Tailscale IPv6 address in `fd7a:115c:a1e0::/48`
+- the machine's MagicDNS name (`ahc-the-beast`) or a `*.ts.net` name
+
+`0.0.0.0`, a public address, and `192.168.x` (and other non-Tailscale
+addresses, including `127.0.0.1`) are refused. The app logs the refusal and
+does not listen. To override that on purpose:
 
 ```powershell
-$env:ALICEVOICE_BRIDGE_BIND = "100.64.1.2:8765"
+$env:ALICEVOICE_BRIDGE_ALLOW_UNSAFE_BIND = "1"
 ```
 
-If Windows refuses the prefix, once, as the user who runs the app:
+There is no authentication on the bridge. Do not point the override at the
+public internet.
 
 ```powershell
-netsh http add urlacl url=http://100.64.1.2:8765/ user=$env:USERNAME
+tailscale ip -4
+$env:ALICEVOICE_BRIDGE_BIND = "100.x.y.z:8765"
 ```
 
-`127.0.0.1:8765` does not need that reservation. The bridge stays off until
-`ALICEVOICE_BRIDGE_BIND` or `BridgeBind` in appsettings is set.
+HttpListener on a non-loopback address needs a URL reservation, once, as the
+user who runs the app (this is the usual Windows step, not a Tailscale step):
+
+```powershell
+netsh http add urlacl url=http://100.x.y.z:8765/ user=$env:USERNAME
+```
+
+The phone's default `ALICEVOICE_BEAST_HOST` is the Tailscale MagicDNS name
+`ahc-the-beast`. Override it with the Beast's `100.x` address if MagicDNS is
+off. The phone does not copy the `Mirrored` scene folder or the PC's
+voice-assignment file. AllTalk and Piper still run on the Beast. Android's own
+speech engine is a separate provider (`AndroidSpeech` = 3 in
+`voice-assignments.json`) and can be assigned on the phone. Windows ignores
+that value and keeps AllTalk = 0, SAPI = 1, Piper = 2.
 
 ## Android head
 
@@ -77,19 +106,36 @@ A Debug APK is written under
 Install it with `adb install` (the `-Signed.apk` is the one the SDK signs
 with the debug key).
 
-On the phone, point App U at the Beast. Same keys as above, in the environment
-or in `appsettings.json` inside the app's private files (see
-`appsettings.example.json`). `ALICEVOICE_*` environment variables win.
-
-```text
-ALICEVOICE_BEAST_HOST=100.64.1.2
-ALICEVOICE_BRIDGE_PORT=8765
-```
+On the phone, `ALICEVOICE_BEAST_HOST` defaults to `ahc-the-beast`. Set it to
+the Beast's Tailscale IPv4 (`100.x.y.z`) when MagicDNS is not available.
+`ALICEVOICE_BRIDGE_PORT` defaults to 8765. `ALICEVOICE_*` environment variables
+win over `appsettings.json` (see `appsettings.example.json`).
 
 Android 9+ blocks plain HTTP unless the app allows it. This head sets
 `usesCleartextTraffic` because Ollama, Hermes, AllTalk, and the bridge are
-HTTP, matching the desktop. Tailscale encrypts the tunnel. Do not put the
-bridge on the open internet.
+HTTP, matching the desktop. Tailscale encrypts the tunnel.
 
 The phone asks for the microphone and for notifications. Wake mode starts a
 microphone foreground service so the process is allowed to keep listening.
+
+### Android updates
+
+`version.json` may grow an `android` object. The Windows fields stay, and the
+existing signature still covers the whole file. This repo does not commit a
+new `version.json.p7s`. Signing happens on the Beast, where the CN=AHC
+code-signing certificate lives (thumbprint
+`9F5116C32A280552E38F7FA87967EDED6C9C34C2`, valid until 2028-10-29):
+
+```powershell
+powershell -File universal/scripts/Publish-AndroidRelease.ps1 `
+  -Version 0.2.0 `
+  -ApkUrl https://github.com/daemonlinks/alice-voice-desktop/releases/download/v0.2.0/AliceVoice.AppU.apk `
+  -Sha256 ((Get-FileHash .\AliceVoice.AppU.apk).Hash)
+```
+
+The script keeps the MSIX fields, writes the APK url and hash, and runs
+`tools/AliceVoice.ReleaseSigner`. Commit `version.json` and `version.json.p7s`
+together afterwards. Until that signed file is what GitHub serves, the phone
+keeps reporting that the manifest only has a Windows package. After it is
+served, the phone checks the same signature and offers the APK. It does not
+download or install the APK by itself.

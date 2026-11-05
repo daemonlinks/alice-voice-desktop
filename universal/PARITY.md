@@ -89,7 +89,7 @@ DirectML adapter numbers are not NVIDIA indexes and could land on GPU 0.
 | Cancel | A new turn cancels the previous one and stops playback | Same. Playback `Stop()` is wired to the NAudio player | Same, wired to `AudioTrack` |
 | Streaming | Alice LOCAL partials update the bubble. A leading `{` is hidden (possible tool call) | The session shows partials. Hiding `{` still happens inside `AliceLocalBackend` | The bridge forwards the events the backend already raised |
 | Remember | "♥ remember" on Alice LOCAL replies, truncated to 1000 chars, `honcho_save`. Disabled for fleet with the same tooltip | Same | `POST /v1/local/remember`, which calls `AliceLocalBackend.RememberAsync` |
-| History split | One history in the window | The window keeps its own `AliceLocalBackend` | The phone's bridge backend is a **second** instance. Two conversations can exist. They share the SOUL file and Honcho. See owner decisions |
+| History | One history in the window | The window and the bridge share one `RecordingAliceLocalBackend` and one `SharedTranscript`. Asks are serialized. A phone turn is appended on the Beast and the window redraws it; the phone polls `GET /v1/local/transcript` | Same store. The phone does not keep a second Alice LOCAL history |
 | Local Ollama and the alice_voice agent backend | Registered, not selected by the window. Fleet members go through `IFleetChat` | Still registered, still not on the agent picker | Same |
 | Context sliders | Key points (2), memory items (1), char limit (80). **Disabled.** Tooltip: context injection is controlled by the agent | Still disabled, same tooltip, same defaults shown | Same. Not implemented, on purpose |
 
@@ -114,10 +114,11 @@ Tools: `honcho_search · honcho_save · honcho_forget · search (Alice LOCAL)`.
 |---|---|---|---|
 | AllTalk | HTTP `127.0.0.1:7851`, `/api/tts-generate`, chunked at 900 chars, plays the WAV's real rate. Default voice `female_07.wav`. Preferred list hit `female_06` | Original `AllTalkTtsProvider` | Same HTTP form, implemented in `AllTalkVoiceProvider`, played on the phone. URL follows the Beast host unless `ALICEVOICE_ALLTALK_URL` is set. No API key |
 | Piper | `piper.exe` from the Hermes venv, voice dir `hermes\cache\piper-voices`, default `en_GB-southern_english_female-low`. Missing exe or voice returns without throwing | Original `PiperTtsProvider` | `POST /v1/tts/piper` runs `PiperSynth` (same arguments) on the Beast and returns one WAV. A missing bridge is an error the Test TTS button can show. A missing voice is a 404 and silence, matching a missing local voice |
-| SAPI | Windows `System.Speech`, the default provider | Original `SapiTtsProvider` | The SAPI slot is Android `TextToSpeech` (on-device, no network). Display name "Android speech". Assignments stored as provider `1` still mean "the on-device system voice" |
+| SAPI | Windows `System.Speech`, the default provider | Original `SapiTtsProvider` | Still SAPI's number (`1`) is unused on the phone. Android speech is its own provider |
 | Test line | "Hello Master. This is a voice quality test." | Same | Same |
 | Per-member voices | `%LOCALAPPDATA%\AliceVoice\voice-assignments.json`. Enum stored as a number | Same path and same JSON, so the two Windows apps read one file | The phone's private `voice-assignments.json`. It is not the PC file. Sync is an owner decision |
-| Default when nothing is saved | The WinUI combo does not force a selection; the manager's default profile is SAPI | App U selects SAPI (or the first provider) so the first test has a voice. Equal or better | Android speech, which occupies the SAPI slot |
+| Android speech | Not in the WinUI enum | `VoiceProviderKind.AndroidSpeech = 3`, appended so AllTalk stays 0, SAPI stays 1, Piper stays 2. If an assignment file names it, Windows logs that the provider is not on this device and uses SAPI. The file is not rewritten. `VoiceProviderManager` already skips a kind it was not given | Registered on the phone, listed in the provider picker, and saved in the same assignment JSON (`"Provider": 3`) with the Android voice name |
+| Default when nothing is saved | The WinUI combo does not force a selection; the manager's default profile is SAPI | App U selects SAPI (or the first provider) so the first test has a voice. Equal or better | SAPI is not registered, so the first registered provider is used (AllTalk, then Android speech, then Piper) |
 
 ## SOUL editor
 
@@ -138,7 +139,7 @@ Tools: `honcho_search · honcho_save · honcho_forget · search (Alice LOCAL)`.
 | Ollama | `http://localhost:11434` | `ALICEVOICE_OLLAMA_URL` | Unchanged | The bridge's Alice LOCAL uses the Beast's Ollama. If `ALICEVOICE_OLLAMA_URL` is set on the phone it is not what Alice LOCAL uses; the bridge uses the PC's options |
 | AllTalk | `http://127.0.0.1:7851` | `ALICEVOICE_ALLTALK_URL` | Unchanged | `http://<Beast>:7851` unless the phone sets the URL |
 | Honcho | `http://localhost:8001` | `HONCHO_BASE` / `.env` | Unchanged, via the Python script | Only on the Beast, via that script |
-| App U bridge | off | `ALICEVOICE_BRIDGE_BIND=host:port` on the PC. Phone: `ALICEVOICE_BEAST_HOST` and optional `ALICEVOICE_BRIDGE_PORT` (default **8765**) | Listens only when bind is set | Client. Cleartext HTTP inside Tailscale |
+| App U bridge | off | `ALICEVOICE_BRIDGE_BIND` must be a Tailscale address (100.64.0.0/10, Tailscale IPv6, MagicDNS name, or `*.ts.net`). `0.0.0.0`, public addresses, and `192.168.x` are refused unless `ALICEVOICE_BRIDGE_ALLOW_UNSAFE_BIND=1`. Phone default host is `ahc-the-beast`; port default **8765** | Listens only when the bind is accepted | Client. Cleartext HTTP inside Tailscale. Does not sync `Mirrored` or the PC voice file |
 
 `BeastHost`, `BridgePort`, and `BridgeBind` may also sit in `appsettings.json`.
 They are not fields of `AliceVoiceOptions`, so the WinUI schema is unchanged.
@@ -157,7 +158,7 @@ prompts, transcripts, SOUL text, or memory text.
 | Manifest | `version.json` + `version.json.p7s` | Same `HttpAppUpdater` | Same check, same verifier |
 | Trust | One signer, Code Signing EKU, digitalSignature, chain to daemonlinks-AHC-CA only, thumbprint `7ED67FFF3DF7360AA24E4DE1C01B300BFEBAFF0B`. Windows root store is not consulted. Revocation unknown / offline is tolerated and logged. Revoked or any other chain error is rejected | Same class | Same class. The phone does not get a looser check |
 | Offer rules | Higher version, https URL, 64-hex sha256, valid signature. Otherwise silence | Same | Same |
-| What the UI does | Shows "Update available: {version}". Does **not** download or launch | Same banner. `DownloadUpdateAsync` is not called | If the URL is `.msix` / `.msixbundle` / `.appx` / `.appxbundle`, the banner says it is a Windows package and will not be installed. The current signed manifest is an MSIX. See owner decisions |
+| What the UI does | Shows "Update available: {version}". Does **not** download or launch | Same banner. `DownloadUpdateAsync` is not called | The Android head asks the updater for an Android package. A signed `android` object (`version`, https `downloadUrl`, `sha256`) is offered as "Update available: {version} (Android APK)". The app still does not download or install it. With no `android` object, the banner says the manifest only has a Windows package. `version.json` in git is unchanged; the Beast re-signs with `universal/scripts/Publish-AndroidRelease.ps1` |
 | Version | `Directory.Build.props` (`0.1.0`) | The MAUI display version is that same `$(Version)` | Same |
 
 `version.json` and `version.json.p7s` were not edited.
@@ -184,7 +185,7 @@ path. Env still wins.
 | `HERMES_HOME` | Hermes install, default `%LOCALAPPDATA%\hermes` | Original |
 | `API_SERVER_KEY` | Else Hermes `.env` | Resolved on the Beast only, when the bridge handles fleet chat |
 | `HONCHO_BASE`, `HONCHO_API_KEY`, `HONCHO_WORKSPACE`, `HONCHO_PEER`, `HONCHO_AI_PEER`, `TAVILY_API_KEY`, `ALICEVOICE_ENV` | Tool script | Unchanged. Not copied into C# |
-| `ALICEVOICE_BEAST_HOST`, `ALICEVOICE_BRIDGE_PORT`, `ALICEVOICE_BRIDGE_BIND` | App U only | See the bridge section |
+| `ALICEVOICE_BEAST_HOST`, `ALICEVOICE_BRIDGE_PORT`, `ALICEVOICE_BRIDGE_BIND`, `ALICEVOICE_BRIDGE_ALLOW_UNSAFE_BIND` | App U only | Android defaults the host to `ahc-the-beast`. The bind is Tailscale-only unless the override flag is `1` |
 
 | Path | Role | App U |
 |---|---|---|
@@ -209,7 +210,7 @@ images), VU meter from about -40 dBFS to 0 on a 100 px bar.
 
 - Parity matrix (this file) and build notes (`README.md`).
 - `AliceVoice.Universal.Core`: session, wake setup, voice-assignment file, backgrounds, latency, Beast URL rules, update offer, AllTalk HTTP client, Piper synth, bridge server and client.
-- Tests for those (26). Original suite still passes (133 passed, the Ollama live test skipped when Ollama is down).
+- Tests for those (49). Original suite still passes (133 passed, the Ollama live test skipped when Ollama is down).
 - MAUI Android head builds. The Debug APK contains the wake models and `libonnxruntime.so`.
 - MAUI Windows head is in the same project and is compiled only on Windows (`net10.0-windows10.0.19041.0`). This environment has no Windows SDK, so that target was not built here. It references the original audio and inference projects rather than reimplementing them.
 
@@ -218,17 +219,14 @@ images), VU meter from about -40 dBFS to 0 on a 100 px bar.
 - Run the Windows head on the Beast and confirm a full Talk → GPU STT → Ollama → AllTalk loop against the live services. The code path is the original one; it has not been executed on that machine in this run.
 - Run the APK on a handset: mic permission, a wake detection, a bridged turn, SOUL save, remember. The package builds; the handset pass has not happened.
 - Pixel-identical layout. The MAUI page has the same controls and the same strings. It is not the WinUI XAML.
-- Scene images on the phone are not the Beast's `Mirrored` folder.
-- Voice assignments are not synced between the phone and the PC.
-- The phone and the window do not share one Alice LOCAL transcript. They share the SOUL file and Honcho.
-- An Android download URL inside the signed manifest.
 - Context sliders, because the WinUI app leaves them disabled.
 - The experimental ONNX Whisper engine, because the WinUI app does not register it.
+- A handset install of a signed APK. The code will offer one after the Beast re-signs `version.json`. The committed manifest is still the original MSIX pair.
 
-## Decisions for the owner
+## Owner decisions, as implemented
 
-1. **Bridge address.** Set `ALICEVOICE_BRIDGE_BIND` on the Beast to its Tailscale IP and port 8765 (or another port), and `ALICEVOICE_BEAST_HOST` on the phone to that IP. Leave the bind unset and the port stays closed. There is no authentication, matching local Honcho. Do not bind `0.0.0.0` on a machine that is reachable from the public internet.
-2. **One conversation or two.** Today the window and the phone each have an Alice LOCAL history in the same process, and both reload the same SOUL file. Say if they should be one history.
-3. **Android updates.** The signed `version.json` points at an MSIX. App U will not install that on a phone. Adding an Android URL and hash means editing `version.json` and re-signing `version.json.p7s` with the AliceVoice Code Signing certificate. This run did not touch that pair. The signing certificate `CN=AHC` (`9F5116C32A280552E38F7FA87967EDED6C9C34C2`) is valid until 2028-10-29; renew before then, as the WinUI readme already says.
-4. **SAPI on the phone** is Android's own speech engine. AllTalk and Piper still come from the Beast when it is reachable. Say if the phone should refuse the system voice and only speak AllTalk.
-5. **Backgrounds.** Say if the phone should pull `~/ahc-the-beast/voice/Mirrored` from the Beast. It does not, yet.
+1. **Bridge address.** Tailscale only. `0.0.0.0`, public IPs, and `192.168.x` are refused unless `ALICEVOICE_BRIDGE_ALLOW_UNSAFE_BIND=1`. The phone defaults to `ahc-the-beast`. A non-loopback prefix still needs `netsh http add urlacl` once on the Beast (see `universal/README.md`).
+2. **One conversation.** The bridge process owns the Alice LOCAL history. The window and the phone both read and append it. Turns are serialized.
+3. **Android updates.** The manifest schema accepts `android.version`, `android.downloadUrl`, and `android.sha256`. The Windows fields and the current verifier stay. This branch does not change `version.json` or `version.json.p7s`. Re-sign on the Beast with `universal/scripts/Publish-AndroidRelease.ps1` and the CN=AHC certificate `9F5116C32A280552E38F7FA87967EDED6C9C34C2` (valid until 2028-10-29).
+4. **Android speech** is `VoiceProviderKind.AndroidSpeech = 3`. It shows in the phone's provider list and can be assigned. Windows ignores that assignment and does not renumber 0, 1, or 2.
+5. **No Mirrored sync.** The phone does not copy `~/ahc-the-beast/voice/Mirrored` or the PC's voice-assignment file. AllTalk and Piper still run on the Beast.

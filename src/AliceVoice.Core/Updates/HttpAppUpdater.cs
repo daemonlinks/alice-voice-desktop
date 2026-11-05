@@ -26,16 +26,19 @@ public sealed partial class HttpAppUpdater : IAppUpdater
     private readonly Action<string> _launch;
     private readonly string _signatureUrl;
     private readonly UpdateSignatureVerifier _verifier;
+    private readonly UpdatePackagePreference _packagePreference;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public HttpAppUpdater(string manifestUrl, string? downloadDir = null, HttpMessageHandler? handler = null,
         string? currentVersion = null, Action<string>? launch = null,
-        UpdateSignatureVerifier? verifier = null, string? signatureUrl = null)
+        UpdateSignatureVerifier? verifier = null, string? signatureUrl = null,
+        UpdatePackagePreference packagePreference = UpdatePackagePreference.Windows)
     {
         _manifestUrl = manifestUrl;
         _signatureUrl = signatureUrl ?? SignatureUrlFor(manifestUrl);
         _verifier = verifier ?? UpdateSignatureVerifier.CreateDefault();
+        _packagePreference = packagePreference;
         _downloadDir = downloadDir ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "AliceVoice", "updates");
@@ -100,42 +103,22 @@ public sealed partial class HttpAppUpdater : IAppUpdater
             var manifest = JsonSerializer.Deserialize<UpdateManifest>(manifestBytes, JsonOptions);
             if (manifest is null) return null;
 
-            var current = ParseVersion(CurrentVersion) ?? new Version(0, 0, 0);
-            var latest = ParseVersion(manifest.Version);
-            if (latest is null)
-            {
-                Log.Warning("Update manifest has an unreadable version {Version}", manifest.Version);
-                return null;
-            }
-            if (latest <= current)
-            {
-                Log.Information("Alice Voice is up to date ({Version})", CurrentVersion);
-                return null;
-            }
-            if (!IsValidSha256(manifest.Sha256))
-            {
-                Log.Warning("Update {Version} ignored: manifest has no valid sha256", manifest.Version);
-                return null;
-            }
-            if (!Uri.TryCreate(manifest.DownloadUrl, UriKind.Absolute, out var url) || url.Scheme != Uri.UriSchemeHttps)
-            {
-                Log.Warning("Update {Version} ignored: download URL is not https", manifest.Version);
-                return null;
-            }
-
             var signature = await TryGetSignatureAsync(ct);
             var check = _verifier.Verify(manifestBytes, signature);
             if (!check.IsValid)
             {
-                Log.Warning("Update {Version} ignored: manifest signature rejected ({Reason})", manifest.Version, check.Reason);
+                Log.Warning("Update manifest signature rejected ({Reason})", check.Reason);
                 return null;
             }
-            Log.Information("Update manifest {Version} signature {Reason}; signer {Subject} ({Thumbprint})",
-                manifest.Version, check.Reason, check.SignerSubject, check.SignerThumbprint);
+            Log.Information("Update manifest signature {Reason}; signer {Subject} ({Thumbprint})",
+                check.Reason, check.SignerSubject, check.SignerThumbprint);
 
-            Log.Information("Update available: {Latest} (installed {Current})", manifest.Version, CurrentVersion);
-            return new ReleaseInfo(manifest.Version, manifest.DownloadUrl, manifest.Sha256!.ToLowerInvariant(),
-                manifest.Notes, manifest.PublishedAt);
+            var release = SelectPackage(manifest, CurrentVersion, _packagePreference);
+            if (release is null)
+                Log.Information("Alice Voice is up to date ({Version}) or the manifest has no usable package", CurrentVersion);
+            else
+                Log.Information("Update available: {Latest} (installed {Current})", release.Version, CurrentVersion);
+            return release;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -218,6 +201,40 @@ public sealed partial class HttpAppUpdater : IAppUpdater
         try { if (File.Exists(path)) File.Delete(path); } catch { }
     }
 
+    /// <summary>
+    /// Pick the package a head should offer. Callers must already have verified the
+    /// detached signature over these exact bytes. Windows keeps using the top-level
+    /// MSIX fields. Android prefers <c>android</c> (version, https APK URL, sha256)
+    /// and otherwise falls back to the Windows fields so the UI can say the manifest
+    /// has no phone package yet.
+    /// </summary>
+    public static ReleaseInfo? SelectPackage(string manifestJson, string currentVersion, UpdatePackagePreference preference)
+    {
+        var manifest = JsonSerializer.Deserialize<UpdateManifest>(manifestJson, JsonOptions);
+        return manifest is null ? null : SelectPackage(manifest, currentVersion, preference);
+    }
+
+    private static ReleaseInfo? SelectPackage(UpdateManifest manifest, string currentVersion, UpdatePackagePreference preference)
+    {
+        if (preference == UpdatePackagePreference.Android && TryPackage(manifest.Android?.Version ?? manifest.Version, manifest.Android?.DownloadUrl, manifest.Android?.Sha256, manifest, currentVersion) is { } apk
+            && IsApk(apk.DownloadUrl))
+            return apk;
+        return TryPackage(manifest.Version, manifest.DownloadUrl, manifest.Sha256, manifest, currentVersion);
+    }
+
+    private static bool IsApk(string url)
+        => Uri.TryCreate(url, UriKind.Absolute, out var u) && u.AbsolutePath.EndsWith(".apk", StringComparison.OrdinalIgnoreCase);
+
+    private static ReleaseInfo? TryPackage(string? versionText, string? downloadUrl, string? sha, UpdateManifest manifest, string currentVersion)
+    {
+        var current = ParseVersion(currentVersion) ?? new Version(0, 0, 0);
+        var latest = ParseVersion(versionText);
+        if (latest is null || latest <= current) return null;
+        if (!IsValidSha256(sha)) return null;
+        if (!Uri.TryCreate(downloadUrl, UriKind.Absolute, out var url) || url.Scheme != Uri.UriSchemeHttps) return null;
+        return new ReleaseInfo(latest.ToString(3), downloadUrl!, sha!.ToLowerInvariant(), manifest.Notes, manifest.PublishedAt);
+    }
+
     private sealed class UpdateManifest
     {
         public string Version { get; set; } = "0.0.0";
@@ -225,5 +242,20 @@ public sealed partial class HttpAppUpdater : IAppUpdater
         public string? Sha256 { get; set; }
         public string? Notes { get; set; }
         public DateTimeOffset? PublishedAt { get; set; }
+        public AndroidRelease? Android { get; set; }
     }
+
+    private sealed class AndroidRelease
+    {
+        public string? Version { get; set; }
+        public string? DownloadUrl { get; set; }
+        public string? Sha256 { get; set; }
+    }
+}
+
+/// <summary>Which signed package a head should offer. The WinUI app leaves this at Windows.</summary>
+public enum UpdatePackagePreference
+{
+    Windows,
+    Android
 }

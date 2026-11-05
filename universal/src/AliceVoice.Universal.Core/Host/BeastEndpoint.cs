@@ -17,6 +17,7 @@ public sealed record BeastServiceUrls(string Host, int BridgePort)
     public string LocalAsk => Base + "/v1/local/ask";
     public string LocalRemember => Base + "/v1/local/remember";
     public string LocalCommand => Base + "/v1/local/command";
+    public string LocalTranscript => Base + "/v1/local/transcript";
     public string FleetSend => Base + "/v1/fleet/send";
     public string FleetReachable => Base + "/v1/fleet/reachable";
     public string FleetReset => Base + "/v1/fleet/reset";

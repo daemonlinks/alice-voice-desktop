@@ -8,13 +8,20 @@ namespace AliceVoice.Core.Voice;
 public enum VoiceProviderKind
 {
     /// <summary>AllTalk TTS server (direct HTTP, no relay). High-quality voices.</summary>
-    AllTalk,
+    AllTalk = 0,
 
     /// <summary>Windows SAPI (System.Speech). Instant, local, no network.</summary>
-    Sapi,
+    Sapi = 1,
 
     /// <summary>Piper TTS (fully local, fleet-standard) via CLI. Runs piper.exe.</summary>
-    Piper
+    Piper = 2,
+
+    /// <summary>
+    /// Android TextToSpeech. Appended so existing assignment files keep
+    /// AllTalk=0, SAPI=1, Piper=2. Windows has no engine for this value and
+    /// ignores it (the voice manager skips a provider it does not have).
+    /// </summary>
+    AndroidSpeech = 3
 }
 
 /// <summary>

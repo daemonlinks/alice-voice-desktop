@@ -18,7 +18,7 @@ public sealed class AndroidSpeechProvider : Java.Lang.Object, IVoiceProvider, An
         _tts = new AndroidTts(Android.App.Application.Context, this);
     }
 
-    public VoiceProviderKind Kind => VoiceProviderKind.Sapi;
+    public VoiceProviderKind Kind => VoiceProviderKind.AndroidSpeech;
     public string DisplayName => "Android speech";
 
     public void OnInit(OperationResult status) => _ready.TrySetResult(status == OperationResult.Success);

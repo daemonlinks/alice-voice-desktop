@@ -6,6 +6,7 @@ using AliceVoice.Core.Config;
 using AliceVoice.Core.Stt;
 using AliceVoice.Core.Voice;
 using AliceVoice.Universal.Audio;
+using AliceVoice.Universal.Host;
 using AliceVoice.Universal.Voice;
 using Serilog;
 
@@ -32,6 +33,8 @@ public sealed class BeastBridge : IAsyncDisposable
     private readonly SoulReloadHub? _hub;
     private readonly Func<IVoiceBackend> _localFactory;
     private readonly Func<IFleetChat> _fleetFactory;
+    private readonly SharedTranscript? _transcript;
+    private readonly bool _allowUnsafeBind;
     private readonly string _host;
     private readonly int _port;
     private readonly SemaphoreSlim _localLock = new(1, 1);
@@ -43,7 +46,7 @@ public sealed class BeastBridge : IAsyncDisposable
     private IFleetChat? _fleet;
 
     public BeastBridge(AliceVoiceOptions options, ISttClient stt, ISoulGateway soul, IPiperSynth piper, string host, int port, SoulReloadHub? hub = null,
-        Func<IVoiceBackend>? localFactory = null, Func<IFleetChat>? fleetFactory = null)
+        Func<IVoiceBackend>? localFactory = null, Func<IFleetChat>? fleetFactory = null, SharedTranscript? transcript = null, bool allowUnsafeBind = false)
     {
         _options = options;
         _stt = stt;
@@ -52,6 +55,8 @@ public sealed class BeastBridge : IAsyncDisposable
         _hub = hub;
         _host = host;
         _port = port;
+        _transcript = transcript;
+        _allowUnsafeBind = allowUnsafeBind;
         _localFactory = localFactory ?? (() => new AliceLocalBackend(options));
         _fleetFactory = fleetFactory ?? (() => new HermesApiFleetChat(options.ResolvedHermesApiUrl));
     }
@@ -62,6 +67,10 @@ public sealed class BeastBridge : IAsyncDisposable
     public Task StartAsync(CancellationToken ct = default)
     {
         if (IsListening) return Task.CompletedTask;
+        var decision = BridgeBindPolicy.Evaluate(_host, _allowUnsafeBind);
+        if (!decision.Allowed)
+            throw new InvalidOperationException(decision.Reason);
+        if (decision.Warned) Log.Warning("{Reason}", decision.Reason);
         var listener = new HttpListener();
         listener.Prefixes.Add(Prefix);
         listener.Start();
@@ -165,6 +174,12 @@ public sealed class BeastBridge : IAsyncDisposable
             }
             return;
         }
+        if (method == "GET" && path == "/v1/local/transcript")
+        {
+            var turns = _transcript?.Snapshot() ?? Array.Empty<SharedTurn>();
+            await WriteJson(ctx.Response, 200, new TranscriptResponse(_transcript?.Epoch ?? 0, turns.ToList()));
+            return;
+        }
         if (method == "POST" && path == "/v1/local/ask")
         {
             await Ask(ctx, ct);
@@ -246,6 +261,7 @@ public sealed class BeastBridge : IAsyncDisposable
     private async Task Ask(HttpListenerContext ctx, CancellationToken ct)
     {
         var req = await ReadJson<AskRequest>(ctx.Request, ct) ?? new AskRequest(null, null, null);
+        using var origin = ConversationOrigin.Use(ConversationOrigin.Phone);
         IVoiceBackend backend;
         try { backend = await LocalAsync(ct); }
         catch (Exception ex) when (ex is not OperationCanceledException)

@@ -11,7 +11,9 @@ public sealed record UniversalHost(
     string? BackgroundsDirectory,
     BeastServiceUrls? Remote,
     string? BridgeBindHost,
-    int? BridgeBindPort)
+    int? BridgeBindPort,
+    string? BridgeBindRefusal = null,
+    bool AllowUnsafeBridgeBind = false)
 {
     public bool BridgeEnabled => BridgeBindHost is not null && BridgeBindPort is not null;
 
@@ -30,8 +32,11 @@ public sealed record UniversalHost(
         var extra = ReadExtra(layout.SettingsFile);
 
         var beast = First(env, "ALICEVOICE_BEAST_HOST", extra?.BeastHost);
+        if (kind == PlatformHostKind.Android && string.IsNullOrWhiteSpace(beast))
+            beast = BridgeBindPolicy.DefaultBeastHost;
         var bridgePortText = First(env, "ALICEVOICE_BRIDGE_PORT", extra?.BridgePort?.ToString());
         var bridgeBind = First(env, "ALICEVOICE_BRIDGE_BIND", extra?.BridgeBind);
+        var allowUnsafe = BridgeBindPolicy.IsOverrideEnabled(First(env, BridgeBindPolicy.OverrideEnvironmentVariable, extra?.AllowUnsafeBridgeBind));
 
         if (kind == PlatformHostKind.Android && !string.IsNullOrWhiteSpace(beast))
             BeastServiceUrls.ApplyServiceDefaults(options, beast);
@@ -54,13 +59,24 @@ public sealed record UniversalHost(
 
         string? bindHost = null;
         int? bindPort = null;
+        string? refusal = null;
         if (kind == PlatformHostKind.Windows && bridgeBind is not null && BeastServiceUrls.TryParseBind(bridgeBind, out var bh, out var bp))
         {
-            bindHost = bh;
-            bindPort = bp;
+            var decision = BridgeBindPolicy.Evaluate(bh, allowUnsafe);
+            if (!decision.Allowed)
+            {
+                refusal = decision.Reason;
+                Serilog.Log.Warning("{Reason}", decision.Reason);
+            }
+            else
+            {
+                if (decision.Warned) Serilog.Log.Warning("{Reason}", decision.Reason);
+                bindHost = bh;
+                bindPort = bp;
+            }
         }
 
-        return new UniversalHost(kind, options, layout.LogDirectory, layout.AssignmentPath, options.BackgroundsDir ?? layout.BackgroundsDirectory, remote, bindHost, bindPort);
+        return new UniversalHost(kind, options, layout.LogDirectory, layout.AssignmentPath, options.BackgroundsDir ?? layout.BackgroundsDirectory, remote, bindHost, bindPort, refusal, allowUnsafe);
     }
 
     private static string? First(Func<string, string?> env, string name, string? fromFile)
@@ -89,6 +105,7 @@ public sealed record UniversalHost(
         public string? BeastHost { get; set; }
         public int? BridgePort { get; set; }
         public string? BridgeBind { get; set; }
+        public string? AllowUnsafeBridgeBind { get; set; }
     }
 }
 

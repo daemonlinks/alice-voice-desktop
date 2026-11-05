@@ -5,6 +5,7 @@ using System.Text.Json;
 using AliceVoice.Core.Stt;
 using AliceVoice.Core.Voice;
 using AliceVoice.Universal.Host;
+using AliceVoice.Universal.Voice;
 
 namespace AliceVoice.Universal.Bridge;
 
@@ -118,6 +119,12 @@ public sealed class BeastBridgeClient : IDisposable
         return resp.IsSuccessStatusCode && dto?.Ok == true;
     }
 
+    public async Task<TranscriptResponse> TranscriptAsync(CancellationToken ct = default)
+    {
+        var raw = await _http.GetStringAsync(_urls.LocalTranscript, ct);
+        return JsonSerializer.Deserialize<TranscriptResponse>(raw, Json) ?? new TranscriptResponse(0, new List<SharedTurn>());
+    }
+
     public async Task LocalCommandAsync(string type, CancellationToken ct = default)
     {
         using var resp = await _http.PostAsJsonAsync(_urls.LocalCommand, new CommandRequest(type), Json, ct);
@@ -203,3 +210,4 @@ public sealed record TextResponse(string? Text, string? Error);
 public sealed record ReachableResponse(bool Ok, bool HasApiKey);
 public sealed record VoicesResponse(List<string>? Voices);
 public sealed record PiperRequest(string? Text, string? Voice);
+public sealed record TranscriptResponse(long Epoch, List<SharedTurn> Turns);

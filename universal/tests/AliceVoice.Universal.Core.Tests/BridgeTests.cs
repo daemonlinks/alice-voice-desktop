@@ -26,7 +26,7 @@ public class BridgeTests
         var reloads = 0;
         hub.Register(_ => { reloads++; return Task.CompletedTask; });
         await using var bridge = new BeastBridge(new AliceVoiceOptions(), stt, soul, new EmptyPiper(), "127.0.0.1", port, hub,
-            () => local, () => fleet);
+            () => local, () => fleet, allowUnsafeBind: true);
         await bridge.StartAsync();
 
         using var client = new BeastBridgeClient(new BeastServiceUrls("127.0.0.1", port));
