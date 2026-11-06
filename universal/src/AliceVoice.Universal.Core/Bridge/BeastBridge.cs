@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using AliceVoice.Core.Chat;
 using AliceVoice.Core.Config;
+using AliceVoice.Core.Logging;
 using AliceVoice.Core.Stt;
 using AliceVoice.Core.Voice;
 using AliceVoice.Universal.Audio;
@@ -77,6 +78,7 @@ public sealed class BeastBridge : IAsyncDisposable
         _listener = listener;
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _loop = Task.Run(() => AcceptLoop(_cts.Token));
+        OperationTrail.Leave("bridge.listening", "port=" + _port);
         Log.Information("Beast bridge listening on {Prefix} (phone STT, SOUL, Alice LOCAL, fleet, Piper). No auth — bind this to Tailscale, not the public internet.", Prefix);
         return Task.CompletedTask;
     }
@@ -101,6 +103,7 @@ public sealed class BeastBridge : IAsyncDisposable
         try { await Handle(ctx, ct); }
         catch (Exception ex)
         {
+            OperationTrail.Leave("bridge.request.failed", ex.GetType().Name);
             Log.Warning(ex, "Beast bridge request failed");
             try { await WriteJson(ctx.Response, 500, new OkResponse(false, "bridge error")); } catch { try { ctx.Response.Close(); } catch { } }
         }

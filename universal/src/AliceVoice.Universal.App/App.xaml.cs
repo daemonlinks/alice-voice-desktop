@@ -1,3 +1,4 @@
+using AliceVoice.Core.Logging;
 using AliceVoice.Universal.Bridge;
 using AliceVoice.Universal.Host;
 using AliceVoice.Universal.Session;
@@ -14,13 +15,9 @@ public partial class App : Application
     {
         _services = services;
         InitializeComponent();
-        var host = services.GetRequiredService<UniversalHost>();
-        AppDomain.CurrentDomain.UnhandledException += (_, e) => WriteCrash(host, "domain", e.ExceptionObject as Exception);
-        TaskScheduler.UnobservedTaskException += (_, e) =>
-        {
-            Log.Error(e.Exception, "Unobserved task exception");
-            e.SetObserved();
-        };
+        // Idempotent. The platform entry point and MauiProgram install first;
+        // this covers a head whose entry point did not.
+        CrashDiagnostics.Install();
     }
 
     protected override Window CreateWindow(IActivationState? activationState)
@@ -35,6 +32,7 @@ public partial class App : Application
 #endif
         window.Created += async (_, _) => await StartBridgeAsync();
         window.Destroying += async (_, _) => await ShutdownAsync();
+        OperationTrail.Leave("startup.window");
         return window;
     }
 
@@ -42,10 +40,13 @@ public partial class App : Application
     {
 #if WINDOWS
         if (_services.GetService<BeastBridge>() is not { } bridge) return;
+        OperationTrail.Leave("bridge.start");
         try { await bridge.StartAsync(); }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Beast bridge did not start. A non-loopback bind on Windows needs: netsh http add urlacl url=<prefix> user=%USERNAME%");
+            // Caught on purpose: a refused bind must not take down the window.
+            // The exception is still written to the failure file and the log.
+            CrashDiagnostics.Report("startup", ex, "BeastBridge.StartAsync. A non-loopback bind on Windows needs a URL reservation (netsh http add urlacl) for the user who runs the app.", fatal: false);
         }
 #else
         await Task.CompletedTask;
@@ -54,25 +55,17 @@ public partial class App : Application
 
     private async Task ShutdownAsync()
     {
+        OperationTrail.Leave("shutdown.begin");
         try
         {
             if (_services.GetService<VoiceSession>() is { } session) await session.DisposeAsync();
             if (_services.GetService<BeastBridge>() is { } bridge) await bridge.DisposeAsync();
+            OperationTrail.Leave("shutdown.complete");
         }
-        catch (Exception ex) { Log.Warning(ex, "Shutdown failed"); }
-        finally { await Log.CloseAndFlushAsync(); }
-    }
-
-    private static void WriteCrash(UniversalHost host, string kind, Exception? ex)
-    {
-        try
+        catch (Exception ex)
         {
-            Log.Fatal(ex, "Unhandled {Kind} exception", kind);
-            var dir = Path.Combine(host.LogDirectory, "..", "crash");
-            Directory.CreateDirectory(dir);
-            File.WriteAllText(Path.Combine(dir, $"crash-{DateTime.Now:yyyyMMdd-HHmmss}-{kind}.txt"), $"{DateTime.Now:O}\n{kind}\n{ex}");
-            Log.CloseAndFlush();
+            CrashDiagnostics.Report("shutdown", ex, "App.ShutdownAsync", fatal: false);
         }
-        catch { /* never throw from a crash handler */ }
+        finally { await Log.CloseAndFlushAsync(); }
     }
 }

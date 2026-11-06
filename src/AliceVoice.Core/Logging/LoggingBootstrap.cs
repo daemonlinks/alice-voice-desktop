@@ -28,6 +28,7 @@ public static class LoggingBootstrap
                 path: Path.Combine(logDir, "alice-voice-.log"),
                 rollingInterval: RollingInterval.Day,
                 retainedFileCountLimit: 14,
+                buffered: false,
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}");
 
         string? eventLogError = null;

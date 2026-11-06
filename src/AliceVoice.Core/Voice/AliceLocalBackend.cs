@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AliceVoice.Core.Config;
+using AliceVoice.Core.Logging;
 using Serilog;
 
 namespace AliceVoice.Core.Voice;
@@ -141,6 +142,7 @@ public sealed class AliceLocalBackend : IVoiceBackend
                     if (signature == lastToolCall)
                     {
                         // Same call twice in a row — stop the loop and ask for a plain answer.
+                        OperationTrail.Leave("tool.duplicate", tool);
                         messages.Add(new ChatMessage("user", "[You already have that tool result. Answer Master directly now, without calling a tool.]"));
                         lastToolCall = null;
                         continue;
@@ -148,7 +150,20 @@ public sealed class AliceLocalBackend : IVoiceBackend
                     lastToolCall = signature;
                     Log.Information("Alice LOCAL tool call: {Tool}", tool);
                     EventReceived?.Invoke(new BackendEvent("tool_call", tool));
-                    var result = await RunToolAsync(tool, args, ct);
+                    OperationTrail.Leave("tool.start", tool);
+                    string result;
+                    try
+                    {
+                        result = await RunToolAsync(tool, args, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        OperationTrail.Leave("tool.failed", tool + " " + ex.GetType().Name);
+                        throw;
+                    }
+                    // Length only. The result body can contain memory or search text.
+                    OperationTrail.Leave("tool.end", tool + " chars=" + result.Length);
+                    Log.Information("Alice LOCAL tool finished: {Tool} ({Chars} chars)", tool, result.Length);
                     messages.Add(new ChatMessage("assistant", reply.Trim()));
                     messages.Add(new ChatMessage("user", $"[TOOL {tool} result: {OllamaChatClient.Truncate(result, 4000)}]"));
                     continue;
@@ -244,11 +259,15 @@ public sealed class AliceLocalBackend : IVoiceBackend
             await proc.WaitForExitAsync(timeout.Token);
             var stderr = await stderrTask;
             if (proc.ExitCode != 0)
+            {
+                OperationTrail.Leave("tool.exit", tool + " code=" + proc.ExitCode);
                 Log.Warning("Tool {Tool} exited {Code}: {Err}", tool, proc.ExitCode, OllamaChatClient.Truncate(stderr.Trim(), 200));
+            }
             return string.IsNullOrEmpty(result) ? "{\"error\":\"empty tool result\"}" : result;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
+            OperationTrail.Leave("tool.timeout", tool);
             try { proc.Kill(true); } catch { }
             return "{\"error\":\"tool timed out\"}";
         }

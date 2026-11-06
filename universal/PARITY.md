@@ -189,9 +189,9 @@ path. Env still wins.
 
 | Path | Role | App U |
 |---|---|---|
-| `%LOCALAPPDATA%\AliceVoice\logs` | Daily Serilog file, 14 kept | Windows: same directory. Android: app `logs`, no Event Log |
+| `%LOCALAPPDATA%\AliceVoice\logs` | Daily Serilog file, 14 kept, unbuffered | Windows: same directory (`alice-voice-YYYYMMDD.log`). Android: app `logs`, no Event Log |
 | Windows Event Log source `AliceVoice` | Warnings and up, if the source can be created | Windows head uses `LoggingBootstrap`, so the same rule. Android never tries |
-| `%LOCALAPPDATA%\AliceVoice\crash` | Unhandled exceptions | Windows: next to the logs. Android: `crash` beside the app logs |
+| `%LOCALAPPDATA%\AliceVoice\crash` | Fatal `crash-*.txt` and caught `failure-*.txt`, 32 kept. Fallback `%TEMP%\AliceVoice\crash` if that directory cannot be written | Windows: beside the logs. Android: `crash` beside the app logs, same fallback. WinUI `UnhandledException` is recorded and **not** marked handled, so a UI exception still terminates. See `universal/README.md` |
 | `%ProgramData%\AliceVoice\alice_local\SOUL.md` | The only SOUL | Written only on the Beast |
 | `%ProgramData%\AliceVoice\.env` | Optional Tavily / Honcho | Read only by the Python script |
 | `%LOCALAPPDATA%\AliceVoice\updates` | Downloaded packages | The updater can still stage a file. The UI does not ask it to |

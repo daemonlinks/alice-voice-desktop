@@ -94,6 +94,105 @@ speech engine is a separate provider (`AndroidSpeech` = 3 in
 `voice-assignments.json`) and can be assigned on the phone. Windows ignores
 that value and keeps AllTalk = 0, SAPI = 1, Piper = 2.
 
+## Crash diagnostics
+
+WinUI turns a managed exception on the UI thread into a native stowed
+exception (`0xc000027b` from `Microsoft.UI.Xaml.dll`). That path does not
+raise `AppDomain.UnhandledException` and does not write a .NET Runtime 1026
+event, so the daily log can stay at startup lines through the crash. App U
+records the exception before the process is allowed to exit.
+
+Hooks, registered before `InitializeComponent` on Windows and before
+`CreateMauiApp` work on both heads:
+
+| Hook | What it means |
+|---|---|
+| `Microsoft.UI.Xaml.Application.UnhandledException` | UI-thread exception. `Handled` is left **false**, so the process still terminates. |
+| `AppDomain.UnhandledException` | Fatal process exception. Logged and flushed. The process still terminates. |
+| `TaskScheduler.UnobservedTaskException` | Background task that nobody observed. Written as a non-fatal failure and marked observed, which is the previous behavior. It does not tear the process down. |
+| `AndroidEnvironment.UnhandledExceptionRaiser` | Android fatal path. `Handled` is left **false**. |
+
+`MauiProgram.CreateMauiApp` reports an exception and then rethrows it, so a
+startup failure is on disk and the app still fails to launch. A bridge that
+refuses to bind, a session that fails to initialize, and a shutdown failure
+are caught as they were before (the window stays up, or shutdown continues)
+and are also written to a failure file.
+
+Each report is written with `FileOptions.WriteThrough` and `Flush(true)`
+**before** Serilog is used. Serilog then gets the same redacted text (`FTL`
+for a fatal report, `ERR` for a caught failure) and a fatal report calls
+`Log.CloseAndFlush`. If the crash directory cannot be created, or Serilog is
+already shut down, the file still goes to the fallback directory. A report
+that re-enters the handler writes one short `recursive-*.txt` marker and does
+not loop. The same exception object, or the same type/message/stack within
+two seconds, is written once. Fatal UI exceptions are not marked handled.
+
+The report contains the timestamp, app name, assembly version, process name
+and id, process path, managed thread id and name, source (`ui`, `domain`,
+`task`, `startup`, `shutdown`, `android`, `background`), context, framework,
+OS, and for the exception: type, message, HResult (decimal and hex),
+`Source`, stack, `ToString()`, and inner exceptions (`AggregateException`
+includes every inner). It also copies the in-memory operation trail
+(startup, bridge, turn, `tool.start` / `tool.end` / `tool.failed` with the
+tool name and result length only).
+
+Not written by this path: prompts, tool arguments, tool results, SOUL text,
+tokens, API keys, or the process environment. Values that look like
+`api_key=…`, `Bearer …`, JWTs, `sk-…` keys, JSON fields such as `args`,
+`content`, `query`, `prompt`, or `[TOOL name result: …]` are replaced.
+Review a file before sharing it anyway. The bridge bind rule is unchanged:
+Tailscale only, unless `ALICEVOICE_BRIDGE_ALLOW_UNSAFE_BIND=1`.
+
+### Where the files are
+
+Windows (same folders the WinUI app uses):
+
+| What | Path |
+|---|---|
+| Daily log | `%LOCALAPPDATA%\AliceVoice\logs\alice-voice-YYYYMMDD.log` (14 kept, flushed every event) |
+| Fatal report | `%LOCALAPPDATA%\AliceVoice\crash\crash-YYYYMMDD-HHMMSSfff-<source>-p<pid>-n<seq>.txt` |
+| Caught startup / shutdown / task failure | `%LOCALAPPDATA%\AliceVoice\crash\failure-YYYYMMDD-HHMMSSfff-<source>-p<pid>-n<seq>.txt` |
+| Handler re-entry marker | `%LOCALAPPDATA%\AliceVoice\crash\recursive-YYYYMMDD-HHMMSSfff.txt` |
+| Fallback when `crash` cannot be written | `%TEMP%\AliceVoice\crash\` (same file names) |
+
+32 diagnostic files are kept in each directory; older `crash-`, `failure-`,
+and `recursive-` files are deleted. Android uses the same names under the
+app private directory: `<files>/logs` and `<files>/crash`, with the same
+temp fallback.
+
+### Checking a crash on the Beast
+
+This repo does not install onto the Beast. After you copy a Windows build
+there and the process dies:
+
+1. Open the newest file in `%LOCALAPPDATA%\AliceVoice\crash\`. It should name
+   the exception type, message, HResult, stack, and inners, plus breadcrumbs
+   such as `tool.start honcho_search` and, if the tool returned,
+   `tool.end honcho_search chars=<n>`.
+2. The daily log should now contain a `[FTL]` line beginning
+   `Diagnostic ui` (or `domain` / `startup`) and the same report. A crash
+   that previously left only startup lines is the case this is meant to catch.
+3. Windows can still write Application Error 1000 (`Microsoft.UI.Xaml.dll`,
+   `0xc000027b`). That event is expected. The managed exception is in the
+   crash file, not in a .NET Runtime 1026 event.
+4. Confirm the file does not contain the prompt, the tool arguments, or the
+   tool result body.
+
+Build the Windows head on Windows (this Linux environment has no Windows
+SDK, so it cannot produce that binary):
+
+```powershell
+dotnet workload install maui
+dotnet test universal/tests/AliceVoice.Universal.Core.Tests/AliceVoice.Universal.Core.Tests.csproj -c Debug
+dotnet build universal/src/AliceVoice.Universal.App/AliceVoice.Universal.App.csproj -c Release -f net10.0-windows10.0.19041.0
+dotnet publish universal/src/AliceVoice.Universal.App/AliceVoice.Universal.App.csproj -c Release -f net10.0-windows10.0.19041.0 -p:RuntimeIdentifier=win-x64
+```
+
+The publish output is under
+`universal/src/AliceVoice.Universal.App/bin/Release/net10.0-windows10.0.19041.0/win-x64/publish/`.
+Copy that folder onto the Beast yourself (the running copy has been
+`D:\Apps\AliceVoice.AppU`). Do not point the bridge at a public address.
+
 ## Android head
 
 ```powershell

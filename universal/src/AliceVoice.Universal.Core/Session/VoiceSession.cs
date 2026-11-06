@@ -2,6 +2,7 @@ using System.Diagnostics;
 using AliceVoice.Core.Chat;
 using AliceVoice.Core.Stt;
 using AliceVoice.Core.Updates;
+using AliceVoice.Core.Logging;
 using AliceVoice.Core.Voice;
 using AliceVoice.Core.WakeWord;
 using AliceVoice.Universal.Audio;
@@ -184,6 +185,7 @@ public sealed class VoiceSession : IAsyncDisposable
     public async Task InitializeAsync(CancellationToken ct = default)
     {
         if (!_initializing) return;
+        OperationTrail.Leave("session.init");
         _wake = await _wakeSource.OpenAsync(ct);
         HookWake(_wake);
         if (_wake.IsAvailable)
@@ -207,6 +209,7 @@ public sealed class VoiceSession : IAsyncDisposable
         Append(TranscriptKind.System, "", SessionCopy.Startup, showRemember: false);
         RefreshStatus();
         await ConnectAsync(force: false, ct);
+        OperationTrail.Leave("session.ready");
         Touch();
     }
 
@@ -255,6 +258,7 @@ public sealed class VoiceSession : IAsyncDisposable
             StatusText = "Not connected";
             SetActivity("Offline", ex.Message);
             ShowError($"Connect failed: {ex.Message}");
+            OperationTrail.Leave("session.connect.failed", ex.GetType().Name);
             Log.Error(ex, "Connect failed");
         }
         RefreshStatus();
@@ -600,6 +604,7 @@ public sealed class VoiceSession : IAsyncDisposable
         var target = TargetName;
         var total = Stopwatch.StartNew();
         var sharedLocal = IsAliceLocal && _conversation is not null;
+        OperationTrail.Leave("turn.start", target);
         var userLine = Append(TranscriptKind.User, "You", $"{text} → {target}", showRemember: false);
         if (sharedLocal) userLine.PendingShared = true;
         StatusText = $"Talking to {target}…";
@@ -629,6 +634,7 @@ public sealed class VoiceSession : IAsyncDisposable
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            OperationTrail.Leave("turn.cancel", target);
             AddLog("Turn cancelled");
             return;
         }
@@ -640,6 +646,7 @@ public sealed class VoiceSession : IAsyncDisposable
             StatusText = "Chat failed";
             SetActivity("Ready");
             ShowError($"{target}: {ex.Message}");
+            OperationTrail.Leave("turn.failed", target + " " + ex.GetType().Name);
             Log.Error(ex, "Turn to {Target} failed", target);
             Touch();
             return;
@@ -693,9 +700,21 @@ public sealed class VoiceSession : IAsyncDisposable
 
         Latency.Add(new TurnTiming(target, sttMs, llm.ElapsedMilliseconds, ttft < 0 ? llm.ElapsedMilliseconds : ttft, ttsMs, sttMs + total.ElapsedMilliseconds));
         StatusText = $"Replied from {target}";
+        OperationTrail.Leave("turn.end", target);
         SetActivity("Ready", target);
         RefreshStatus();
         Touch();
+    }
+
+    /// <summary>Tool names are short identifiers. Anything else is omitted so a breadcrumb cannot carry arguments.</summary>
+    private static string ToolCrumb(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text) || text.Length > 64) return "unlisted";
+        foreach (var c in text)
+        {
+            if (!char.IsLetterOrDigit(c) && c is not ('_' or '-' or '.')) return "unlisted";
+        }
+        return text;
     }
 
     private void OnVoiceEvent(BackendEvent evt)
@@ -717,6 +736,7 @@ public sealed class VoiceSession : IAsyncDisposable
                 break;
             case "tool_call":
                 AddLog($"Tool: {evt.Text}");
+                OperationTrail.Leave("ui.tool", ToolCrumb(evt.Text));
                 SetActivity("Thinking…", $"using {evt.Text}");
                 Touch();
                 break;

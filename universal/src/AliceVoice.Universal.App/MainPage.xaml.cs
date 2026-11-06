@@ -1,5 +1,7 @@
+using AliceVoice.Core.Logging;
 using AliceVoice.Core.Voice;
 using AliceVoice.Universal.Audio;
+using AliceVoice.Universal.Host;
 using AliceVoice.Universal.Session;
 using AliceVoice.Universal.Voice;
 using Microsoft.Extensions.DependencyInjection;
@@ -34,11 +36,18 @@ public partial class MainPage : ContentPage
         await Permissions.RequestAsync<Permissions.Microphone>();
         try { await Permissions.RequestAsync<Permissions.PostNotifications>(); } catch { /* older devices have no runtime notification permission */ }
 #endif
+        OperationTrail.Leave("ui.appear");
         WireSpeechStop();
         _session.Changed += () => MainThread.BeginInvokeOnMainThread(Render);
         _session.MeterChanged += () => MainThread.BeginInvokeOnMainThread(ApplyMeter);
         try { await _session.InitializeAsync(); }
-        catch (Exception ex) { await DisplayAlertAsync("Alice Voice", ex.Message, "OK"); }
+        catch (Exception ex)
+        {
+            // The page already stayed open and showed the message. Keep that,
+            // and also persist the full exception for the next launch.
+            CrashDiagnostics.Report("startup", ex, "MainPage.InitializeAsync", fatal: false);
+            await DisplayAlertAsync("Alice Voice", ex.Message, "OK");
+        }
         _timer = Dispatcher.CreateTimer();
         _timer.Interval = TimeSpan.FromMilliseconds(80);
         _timer.Tick += (_, _) => _session.OnUiTick();

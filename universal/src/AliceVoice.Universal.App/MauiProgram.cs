@@ -1,4 +1,5 @@
 using AliceVoice.Core.Config;
+using AliceVoice.Core.Logging;
 using AliceVoice.Universal.Composition;
 using AliceVoice.Universal.Host;
 using AliceVoice.Universal.Session;
@@ -10,18 +11,35 @@ public static partial class MauiProgram
 {
     public static MauiApp CreateMauiApp()
     {
-        var kind = HostKind();
-        var layout = LayoutFor(kind);
-        var host = UniversalHost.Prepare(kind, layout);
-        UniversalLogging.Configure(host.LogDirectory);
+        // Handlers exist before host setup. A failure below is reported, then
+        // rethrown so startup still fails instead of continuing half-initialized.
+        CrashDiagnostics.Install();
+        try
+        {
+            var kind = HostKind();
+            OperationTrail.Leave("startup.host", kind.ToString());
+            var layout = LayoutFor(kind);
+            CrashDiagnostics.Install(CrashDiagnostics.OptionsFor(layout.LogDirectory));
+            var host = UniversalHost.Prepare(kind, layout);
+            UniversalLogging.Configure(host.LogDirectory);
+            OperationTrail.Leave("startup.logging");
 
-        var builder = MauiApp.CreateBuilder();
-        builder.UseMauiApp<App>();
-        builder.Services.AddUniversal(host);
-        RegisterPlatform(builder.Services, host);
-        builder.Services.AddSingleton<VoiceSession>();
-        builder.Services.AddSingleton<MainPage>();
-        return builder.Build();
+            var builder = MauiApp.CreateBuilder();
+            builder.UseMauiApp<App>();
+            builder.Services.AddUniversal(host);
+            RegisterPlatform(builder.Services, host);
+            builder.Services.AddSingleton<VoiceSession>();
+            builder.Services.AddSingleton<MainPage>();
+            var app = builder.Build();
+            OperationTrail.Leave("startup.ready", kind.ToString());
+            return app;
+        }
+        catch (Exception ex)
+        {
+            try { CrashDiagnostics.Report("startup", ex, "MauiProgram.CreateMauiApp"); }
+            catch { /* the original exception is the one the caller must see */ }
+            throw;
+        }
     }
 
     private static PlatformHostKind HostKind()
