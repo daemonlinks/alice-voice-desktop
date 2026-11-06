@@ -7,12 +7,15 @@
 		<TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">net10.0-android;net10.0-windows10.0.19041.0</TargetFrameworks>
 
 		<OutputType>Exe</OutputType>
+		<!-- Windows is a GUI process. A console window must not stay open behind the desktop icon. -->
+		<OutputType Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">WinExe</OutputType>
 		<RootNamespace>AliceVoice.AppU</RootNamespace>
 		<UseMaui>true</UseMaui>
 		<SingleProject>true</SingleProject>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
-		<ApplicationTitle>Alice Voice App U</ApplicationTitle>
+		<ApplicationTitle>Alice Voice</ApplicationTitle>
+		<ApplicationIcon Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">..\..\..\assets\alice-voice.ico</ApplicationIcon>
 		<ApplicationId>link.daemon.alicevoice.u</ApplicationId>
 		<ApplicationDisplayVersion>$(Version)</ApplicationDisplayVersion>
 		<ApplicationVersion>1</ApplicationVersion>
@@ -30,8 +33,9 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<MauiIcon Include="Resources\AppIcon\appicon.svg" ForegroundFile="Resources\AppIcon\appiconfg.svg" Color="#FF3B3B" />
-		<MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#0A0A0F" BaseSize="128,128" />
+		<!-- Same mark as assets/alice-voice.ico. Android may crop it for the adaptive and round launchers. -->
+		<MauiIcon Include="..\..\..\assets\alice-voice-master.png" Color="#000000" />
+		<MauiSplashScreen Include="..\..\..\assets\alice-voice-master.png" Color="#000000" BaseSize="128,128" />
 		<MauiAsset Include="Resources\Raw\**" LogicalName="%(RecursiveDir)%(Filename)%(Extension)" />
 		<MauiAsset Include="..\..\..\models\wakeword\*" LogicalName="wakeword/%(Filename)%(Extension)" />
 	</ItemGroup>

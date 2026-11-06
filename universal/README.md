@@ -201,6 +201,66 @@ is written as a non-fatal `failure-` file and must not replace the session
 error or terminate the process. Fatal UI exceptions that still escape are
 left unhandled.
 
+## Desktop icon, Start menu, and which PC listens
+
+The icon is the existing Alice mark: `assets/alice-voice-master.png` for the
+Android launcher (including the round crop) and the splash, and
+`assets/alice-voice.ico` embedded in the Windows exe for the taskbar and
+shortcuts. Android TV uses that same icon centered on a black 16:9 banner.
+Nothing is pinned to the taskbar, the Start menu, or an Android home screen.
+Windows gets a desktop shortcut and a Start menu shortcut. Android gets the
+normal launcher entry, and a TV launcher entry, from the package itself.
+
+The shortcut target is `AliceVoice.Universal.App.exe`. It is a windowed
+program, so no console stays open, and it is not a `.ps1`. The working
+directory is the folder that contains the exe, which is where `scripts\` and
+`models\wakeword\` are copied. A second launch activates the window titled
+**Alice Voice App U** instead of starting another process (and another bridge).
+
+Publish on Windows. Do not pass `-r win-x64`.
+
+```powershell
+dotnet publish universal/src/AliceVoice.Universal.App/AliceVoice.Universal.App.csproj -c Release -f net10.0-windows10.0.19041.0
+```
+
+Copy the folder
+`universal/src/AliceVoice.Universal.App/bin/Release/net10.0-windows10.0.19041.0/win10-x64/publish/`
+onto a stable path on that PC. Do not delete
+`%LOCALAPPDATA%\AliceVoice\` or `%ProgramData%\AliceVoice\` — settings,
+logs, and the SOUL file live there, not in the publish folder.
+
+| PC | Install the exe here | Bridge |
+|---|---|---|
+| Beast | `D:\Apps\AliceVoice.AppU` (the copy already running) | Keep `"BridgeBind": "100.64.237.3:8765"` in `%LOCALAPPDATA%\AliceVoice\appsettings.json`. That address is Tailscale. It is not compiled into the app. |
+| Tuner, WS03, WS04, SP01 | Each machine's own stable folder | Do **not** set `BridgeBind` and do **not** set `ALICEVOICE_BRIDGE_BIND`. The app will not listen. |
+
+On each PC, once, from the install folder:
+
+```powershell
+.\AliceVoice.Universal.App.exe --install-shortcuts
+```
+
+That writes, and replaces if you run it again:
+
+- `%USERPROFILE%\Desktop\Alice Voice.lnk`
+- `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Alice Voice.lnk`
+
+If Beast's bind currently exists only as an environment variable, run that
+command in a shell where `ALICEVOICE_BRIDGE_BIND` is `100.64.237.3:8765` and
+the settings file does not already contain `BridgeBind`. The command then
+saves that Tailscale address into appsettings. It will not replace a bind
+that is already there, and it will not save a LAN or public address. Other
+PCs should run it with the variable unset. After that, start the app from
+the desktop icon. Later updates replace the files in the stable folder and
+leave the shortcuts alone, unless the exe moves.
+
+The one-time `netsh http add urlacl` for `http://100.64.237.3:8765/` stays a
+Beast-only step. It is not part of the shortcut.
+
+Android and Android TV pick up the icon, round icon, banner, and launcher
+entries from the APK. Installing or updating the package is enough. Do not
+place the icon on a home screen by hand.
+
 ## Android head
 
 ```powershell

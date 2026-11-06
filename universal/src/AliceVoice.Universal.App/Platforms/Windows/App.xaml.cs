@@ -14,6 +14,24 @@ public partial class App : MauiWinUIApplication
 {
     public App()
     {
+        if (WindowsLaunch.Choose(anotherInstanceRunning: false) == LaunchChoice.InstallShortcuts)
+        {
+            try { WindowsLaunch.InstallShortcuts(); }
+            catch (Exception ex)
+            {
+                try { CrashDiagnostics.Install(); CrashDiagnostics.Report("startup", ex, "WindowsLaunch.InstallShortcuts", fatal: false); }
+                catch { /* the process is exiting either way */ }
+                Environment.Exit(1);
+            }
+            Environment.Exit(0);
+        }
+
+        if (!WindowsSingleInstance.TryBecomePrimary())
+        {
+            WindowsWindow.TryActivate(AppLaunch.WindowTitle);
+            Environment.Exit(0);
+        }
+
         try
         {
             CrashDiagnostics.Install();
