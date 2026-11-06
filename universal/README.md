@@ -203,10 +203,11 @@ left unhandled.
 
 ## Desktop icon, Start menu, and which PC listens
 
-The icon is the existing Alice mark: `assets/alice-voice-master.png` for the
-Android launcher (including the round crop) and the splash, and
-`assets/alice-voice.ico` embedded in the Windows exe for the taskbar and
-shortcuts. Android TV uses that same icon centered on a black 16:9 banner.
+The icon is the existing Alice mark. `assets/alice-voice.ico` is embedded in
+the Windows exe for the taskbar and shortcuts. `assets/alice-voice-master.png`
+is the same artwork for the Android launcher, the round crop, and the splash.
+The resizetizer cannot use that hyphenated file name, so the project links it
+as `appicon` and `splash`. Android TV centers `appicon` on a black 16:9 banner. Android TV uses that same icon centered on a black 16:9 banner.
 Nothing is pinned to the taskbar, the Start menu, or an Android home screen.
 Windows gets a desktop shortcut and a Start menu shortcut. Android gets the
 normal launcher entry, and a TV launcher entry, from the package itself.

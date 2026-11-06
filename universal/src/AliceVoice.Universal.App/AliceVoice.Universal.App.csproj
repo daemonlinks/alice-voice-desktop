@@ -33,9 +33,10 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<!-- Same mark as assets/alice-voice.ico. Android may crop it for the adaptive and round launchers. -->
-		<MauiIcon Include="..\..\..\assets\alice-voice-master.png" Color="#000000" />
-		<MauiSplashScreen Include="..\..\..\assets\alice-voice-master.png" Color="#000000" BaseSize="128,128" />
+		<!-- Same pixels as assets/alice-voice.ico. The source file name contains hyphens, which
+		     Microsoft.Maui.Resizetizer rejects (^[a-z]([a-z0-9_]*[a-z0-9])?$). Link is the output name. -->
+		<MauiIcon Include="..\..\..\assets\alice-voice-master.png" Link="Resources\AppIcon\appicon.png" Color="#000000" />
+		<MauiSplashScreen Include="..\..\..\assets\alice-voice-master.png" Link="Resources\Splash\splash.png" Color="#000000" BaseSize="128,128" />
 		<MauiAsset Include="Resources\Raw\**" LogicalName="%(RecursiveDir)%(Filename)%(Extension)" />
 		<MauiAsset Include="..\..\..\models\wakeword\*" LogicalName="wakeword/%(Filename)%(Extension)" />
 	</ItemGroup>
