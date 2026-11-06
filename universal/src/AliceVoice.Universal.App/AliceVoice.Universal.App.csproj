@@ -16,8 +16,12 @@
 		<ApplicationId>link.daemon.alicevoice.u</ApplicationId>
 		<ApplicationDisplayVersion>$(Version)</ApplicationDisplayVersion>
 		<ApplicationVersion>1</ApplicationVersion>
-		<!-- Unpackaged, same as the WinUI app, so it can spawn Python and write ProgramData. -->
+		<!-- Unpackaged, same as the WinUI app, so it can spawn Python and write ProgramData.
+		     Framework-dependent. An explicit RuntimeIdentifier of win-x64 makes restore look
+		     for Microsoft.NETCore.App.Runtime.Mono.win-x64 and fail with NU1102. -->
 		<WindowsPackageType>None</WindowsPackageType>
+		<SelfContained Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">false</SelfContained>
+		<UseMonoRuntime Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">false</UseMonoRuntime>
 		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">26.0</SupportedOSPlatformVersion>
 		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</SupportedOSPlatformVersion>
 		<TargetPlatformMinVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</TargetPlatformMinVersion>

@@ -125,6 +125,38 @@ public class VoiceSessionTests
     }
 
     [Fact]
+    public async Task TurnFailureSurvivesAThrowingPainter()
+    {
+        var fx = await Fixture.Start();
+        fx.Manager.AskException = new HttpRequestException("ollama refused the connection");
+        fx.Session.Changed += () => throw new KeyNotFoundException("The resource 'Chip' is not present in the dictionary.");
+
+        await fx.Session.SendTextAsync("hello");
+
+        Assert.Contains("ollama refused the connection", fx.Session.Error);
+        Assert.DoesNotContain("Chip", fx.Session.Error);
+        Assert.Contains(fx.Session.Transcript, t => t.Kind == TranscriptKind.System && t.Text.Contains("ollama refused the connection"));
+        Assert.Contains(fx.Session.Logs, line => line.Contains("ollama refused the connection") && !line.Contains("Chip"));
+    }
+
+    [Fact]
+    public async Task ReplyRemainsWhenPaintingTheRememberButtonThrows()
+    {
+        var fx = await Fixture.Start();
+        fx.Session.Changed += () =>
+        {
+            if (fx.Session.Transcript.Any(t => t.ShowRemember))
+                throw new KeyNotFoundException("The resource 'Chip' is not present in the dictionary.");
+        };
+
+        await fx.Session.SendTextAsync("hello");
+
+        Assert.Null(fx.Session.Error);
+        Assert.Contains(fx.Session.Transcript, t => t.Kind == TranscriptKind.Alice && t.Text == "Hello back" && t.ShowRemember);
+        Assert.Equal("Replied from Alice LOCAL", fx.Session.StatusText);
+    }
+
+    [Fact]
     public async Task ErrorBannerClearsAfterTwelveSeconds()
     {
         var fx = await Fixture.Start();
@@ -270,6 +302,7 @@ public class VoiceSessionTests
         public string Reply = "Hello back";
         public List<string> Commands { get; } = new();
         public bool Fail;
+        public Exception? AskException;
         public VoiceBackendKind CurrentKind => VoiceBackendKind.AliceLocal;
         public IVoiceBackend Current => Local;
         public ISttClient Stt => SttClient;
@@ -290,6 +323,7 @@ public class VoiceSessionTests
         {
             LastPrompt = prompt;
             LastOptions = options;
+            if (AskException is not null) return Task.FromException<string>(AskException);
             EventReceived?.Invoke(new BackendEvent("reply_partial", "He"));
             return Task.FromResult(Reply);
         }

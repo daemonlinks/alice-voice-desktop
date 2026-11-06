@@ -185,13 +185,21 @@ SDK, so it cannot produce that binary):
 dotnet workload install maui
 dotnet test universal/tests/AliceVoice.Universal.Core.Tests/AliceVoice.Universal.Core.Tests.csproj -c Debug
 dotnet build universal/src/AliceVoice.Universal.App/AliceVoice.Universal.App.csproj -c Release -f net10.0-windows10.0.19041.0
-dotnet publish universal/src/AliceVoice.Universal.App/AliceVoice.Universal.App.csproj -c Release -f net10.0-windows10.0.19041.0 -p:RuntimeIdentifier=win-x64
+dotnet publish universal/src/AliceVoice.Universal.App/AliceVoice.Universal.App.csproj -c Release -f net10.0-windows10.0.19041.0
 ```
 
-The publish output is under
-`universal/src/AliceVoice.Universal.App/bin/Release/net10.0-windows10.0.19041.0/win-x64/publish/`.
+Do not pass `-r win-x64` or `-p:RuntimeIdentifier=win-x64`. That restore looks
+for `Microsoft.NETCore.App.Runtime.Mono.win-x64` and fails with NU1102. The
+Windows head sets `SelfContained=false` and `UseMonoRuntime=false`, so the
+publish command above is framework-dependent and unpackaged. Output is under
+`universal/src/AliceVoice.Universal.App/bin/Release/net10.0-windows10.0.19041.0/win10-x64/publish/`.
 Copy that folder onto the Beast yourself (the running copy has been
 `D:\Apps\AliceVoice.AppU`). Do not point the bridge at a public address.
+
+A paint failure (for example a missing style while drawing the transcript)
+is written as a non-fatal `failure-` file and must not replace the session
+error or terminate the process. Fatal UI exceptions that still escape are
+left unhandled.
 
 ## Android head
 

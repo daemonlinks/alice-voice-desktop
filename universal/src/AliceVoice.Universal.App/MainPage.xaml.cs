@@ -12,6 +12,7 @@ public partial class MainPage : ContentPage
 {
     private readonly VoiceSession _session;
     private readonly IServiceProvider _services;
+    private readonly HashSet<string> _missingStyles = new(StringComparer.Ordinal);
     private IDispatcherTimer? _timer;
     private bool _started;
     private bool _rendering;
@@ -67,6 +68,12 @@ public partial class MainPage : ContentPage
     private void Render()
     {
         if (ActivityLine is null) return;
+        try { PaintSession(); }
+        catch (Exception ex) { NotePaintFailure(ex); }
+    }
+
+    private void PaintSession()
+    {
         _rendering = true;
         try
         {
@@ -142,10 +149,14 @@ public partial class MainPage : ContentPage
 
     private void ApplyMeter()
     {
-        if (VuFill is null) return;
-        VuFill.WidthRequest = _session.VuWidth;
-        WakeScore.Text = _session.WakeScoreText;
-        MicTag.Text = _session.MicTag;
+        try
+        {
+            if (VuFill is null) return;
+            VuFill.WidthRequest = _session.VuWidth;
+            WakeScore.Text = _session.WakeScoreText;
+            MicTag.Text = _session.MicTag;
+        }
+        catch (Exception ex) { NotePaintFailure(ex); }
     }
 
     private void FillPickers()
@@ -191,7 +202,10 @@ public partial class MainPage : ContentPage
                 card.Children.Add(new Label { Text = entry.Text, TextColor = Color.FromArgb("#E8E8ED"), LineBreakMode = LineBreakMode.WordWrap });
             if (entry.ShowRemember)
             {
-                var remember = new Button { Text = entry.RememberLabel, Style = (Style)Resources["Chip"] };
+                var remember = new Button { Text = entry.RememberLabel };
+                // Chip lives in the application merged dictionary. The page
+                // indexer does not search that scope and throws KeyNotFoundException.
+                if (FindStyle("Chip") is { } chip) remember.Style = chip;
                 remember.IsEnabled = entry.RememberEnabled;
                 if (!entry.RememberEnabled && entry.RememberLabel == "♥ remember")
                     ToolTipProperties.SetText(remember, SessionCopy.RememberFleetTip);
@@ -222,7 +236,11 @@ public partial class MainPage : ContentPage
         if (!LogPanel.IsVisible) return;
         LogPanel.Children.Clear();
         foreach (var line in _session.Logs.TakeLast(80))
-            LogPanel.Children.Add(new Label { Text = line, Style = (Style)Resources["Dim"] });
+        {
+            var label = new Label { Text = line };
+            if (FindStyle("Dim") is { } dim) label.Style = dim;
+            LogPanel.Children.Add(label);
+        }
     }
 
     private void ApplyBackground()
@@ -262,15 +280,15 @@ public partial class MainPage : ContentPage
     private async void OnConnect(object? sender, EventArgs e)
     {
         if (_session.Connected) _session.Disconnect();
-        else await _session.ConnectAsync(force: true);
+        else await GuardUi(nameof(OnConnect), () => _session.ConnectAsync(force: true));
     }
 
-    private async void OnReset(object? sender, EventArgs e) => await _session.ResetAsync();
+    private async void OnReset(object? sender, EventArgs e) => await GuardUi(nameof(OnReset), () => _session.ResetAsync());
 
     private async void OnAgentChanged(object? sender, EventArgs e)
     {
         if (_rendering || AgentPicker.SelectedIndex < 0 || AgentPicker.SelectedIndex >= _session.Targets.Count) return;
-        await _session.SelectTargetAsync(_session.Targets[AgentPicker.SelectedIndex].Id);
+        await GuardUi(nameof(OnAgentChanged), () => _session.SelectTargetAsync(_session.Targets[AgentPicker.SelectedIndex].Id));
     }
 
     private async void OnProviderChanged(object? sender, EventArgs e)
@@ -278,7 +296,7 @@ public partial class MainPage : ContentPage
         if (_rendering || ProviderPicker.SelectedIndex < 0) return;
         var providers = _session.Providers.ToList();
         if (ProviderPicker.SelectedIndex >= providers.Count) return;
-        await _session.SetProviderAsync(providers[ProviderPicker.SelectedIndex].Kind);
+        await GuardUi(nameof(OnProviderChanged), () => _session.SetProviderAsync(providers[ProviderPicker.SelectedIndex].Kind));
     }
 
     private void OnVoiceChanged(object? sender, EventArgs e)
@@ -287,7 +305,7 @@ public partial class MainPage : ContentPage
         _session.SetVoice(_session.VoiceNames[VoicePicker.SelectedIndex]);
     }
 
-    private async void OnTestTts(object? sender, EventArgs e) => await _session.TestVoiceAsync();
+    private async void OnTestTts(object? sender, EventArgs e) => await GuardUi(nameof(OnTestTts), () => _session.TestVoiceAsync());
     private void OnMode(object? sender, EventArgs e) => _session.SetMode(((Button)sender!).Text!.ToLowerInvariant());
     private void OnMood(object? sender, EventArgs e) => _session.SetMood(((Button)sender!).Text!);
     private void OnProfile(object? sender, EventArgs e) => _session.SetProfile(((Button)sender!).Text!.ToLowerInvariant());
@@ -295,7 +313,7 @@ public partial class MainPage : ContentPage
     private async void OnEngine(object? sender, EventArgs e)
     {
         var kind = sender == TtsPiper ? VoiceProviderKind.Piper : VoiceProviderKind.AllTalk;
-        await _session.SetProviderAsync(kind);
+        await GuardUi(nameof(OnEngine), () => _session.SetProviderAsync(kind));
     }
 
     private void OnSensitivity(object? sender, ValueChangedEventArgs e)
@@ -304,22 +322,24 @@ public partial class MainPage : ContentPage
         _session.SetSensitivity(e.NewValue);
     }
 
-    private async void OnTalkPressed(object? sender, EventArgs e) { _sawPress = true; await _session.PressTalkAsync(); }
-    private async void OnTalkReleased(object? sender, EventArgs e) => await _session.ReleaseTalkAsync();
+    private async void OnTalkPressed(object? sender, EventArgs e) { _sawPress = true; await GuardUi(nameof(OnTalkPressed), () => _session.PressTalkAsync()); }
+    private async void OnTalkReleased(object? sender, EventArgs e) => await GuardUi(nameof(OnTalkReleased), () => _session.ReleaseTalkAsync());
     private async void OnTalkClicked(object? sender, EventArgs e)
     {
         if (_sawPress) { _sawPress = false; return; }
-        await _session.ToggleTalkAsync();
+        await GuardUi(nameof(OnTalkClicked), () => _session.ToggleTalkAsync());
     }
 
     private async void OnSend(object? sender, EventArgs e)
     {
         var text = ChatInput.Text;
+        if (string.IsNullOrWhiteSpace(text) || !_session.Connected)
+            return;
         ChatInput.Text = "";
-        await _session.SendTextAsync(text);
+        await GuardUi(nameof(OnSend), () => _session.SendTextAsync(text));
     }
 
-    private async void OnSaveSoul(object? sender, EventArgs e) => await _session.SaveSoulAsync(SoulText.Text ?? "");
+    private async void OnSaveSoul(object? sender, EventArgs e) => await GuardUi(nameof(OnSaveSoul), () => _session.SaveSoulAsync(SoulText.Text ?? ""));
     private void OnCloseSoul(object? sender, EventArgs e) => _session.SetMode("ptt");
     private void OnDismissError(object? sender, EventArgs e) => _session.DismissError();
     private void OnPrevBg(object? sender, EventArgs e) => _session.StepBackground(-1);
@@ -330,4 +350,48 @@ public partial class MainPage : ContentPage
     private void OnToggleSettings(object? sender, EventArgs e) => SettingsPanel.IsVisible = !SettingsPanel.IsVisible;
     private void OnToggleMetrics(object? sender, EventArgs e) => MetricsPanel.IsVisible = !MetricsPanel.IsVisible;
     private void OnToggleTuning(object? sender, EventArgs e) => TuningPanel.IsVisible = !TuningPanel.IsVisible;
+
+    /// <summary>
+    /// Page.Resources does not include styles merged on the application.
+    /// StaticResource in XAML walks that scope; the dictionary indexer does not.
+    /// </summary>
+    private Style? FindStyle(string key)
+    {
+        var scopes = new List<ResourceDictionary>();
+        if (Resources is not null) scopes.Add(Resources);
+        if (Application.Current?.Resources is { } application) scopes.Add(application);
+        if (ResourceLookup.TryFind(scopes, key, ReadLocal, static dictionary => dictionary.MergedDictionaries, out var value) && value is Style style)
+            return style;
+        if (_missingStyles.Add(key)) OperationTrail.Leave("ui.style.missing", key);
+        return null;
+    }
+
+    private static object? ReadLocal(ResourceDictionary dictionary, string key)
+        => dictionary.TryGetValue(key, out var value) ? value : null;
+
+    private async Task GuardUi(string source, Func<Task> work)
+    {
+        try { await work(); }
+        catch (Exception ex)
+        {
+            // Caught here so an async void handler cannot become a fatal WinUI
+            // exception. The fatal hooks still apply to anything this does not catch.
+            try { CrashDiagnostics.Report("ui", ex, "MainPage." + source, fatal: false); }
+            catch { /* the session error, if set, is already stored */ }
+        }
+    }
+
+    private void NotePaintFailure(Exception ex)
+    {
+        OperationTrail.Leave("ui.paint.failed", ex.GetType().Name);
+        try { CrashDiagnostics.Report("ui", ex, "MainPage.Render", fatal: false); }
+        catch { /* keep the process up; the session still holds the original error */ }
+        try
+        {
+            if (ErrorBanner is null || ErrorText is null || string.IsNullOrEmpty(_session.Error)) return;
+            ErrorBanner.IsVisible = true;
+            ErrorText.Text = _session.Error;
+        }
+        catch { /* banner paint is best-effort after the session error is stored */ }
+    }
 }

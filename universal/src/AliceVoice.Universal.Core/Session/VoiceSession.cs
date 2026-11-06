@@ -257,9 +257,9 @@ public sealed class VoiceSession : IAsyncDisposable
             SetConnected(false);
             StatusText = "Not connected";
             SetActivity("Offline", ex.Message);
-            ShowError($"Connect failed: {ex.Message}");
             OperationTrail.Leave("session.connect.failed", ex.GetType().Name);
-            Log.Error(ex, "Connect failed");
+            LogFailure(ex, "Connect failed");
+            ShowError($"Connect failed: {ex.Message}");
         }
         RefreshStatus();
         Touch();
@@ -392,8 +392,8 @@ public sealed class VoiceSession : IAsyncDisposable
         catch (Exception ex)
         {
             StatusText = "Voice test failed";
+            LogFailure(ex, "TTS test failed");
             ShowError($"Voice test failed ({profile.Provider}): {ex.Message}");
-            Log.Warning(ex, "TTS test failed");
         }
         finally { TtsLamp = StageLamp.Dim; Touch(); }
     }
@@ -491,7 +491,7 @@ public sealed class VoiceSession : IAsyncDisposable
             _ptt.Reset();
             _ = FinishUtteranceAsync();
         }
-        MeterChanged?.Invoke();
+        Notify(MeterChanged);
         if (clearError) Touch();
     }
 
@@ -541,8 +541,8 @@ public sealed class VoiceSession : IAsyncDisposable
             _utterance.Cancel();
             await StopMicAsync();
             TalkButtonText = "🎤 Talk";
+            LogFailure(ex, "PTT failed");
             ShowError($"Microphone error: {ex.Message}");
-            Log.Error(ex, "PTT failed");
             ResumeWakeIfIdle();
         }
         Touch();
@@ -581,8 +581,8 @@ public sealed class VoiceSession : IAsyncDisposable
             SttLamp = StageLamp.Red;
             StatusText = "Transcription failed";
             SetActivity("Ready");
+            LogFailure(ex, "STT failed");
             ShowError($"Speech-to-text failed: {ex.Message}");
-            Log.Error(ex, "STT failed");
             Touch();
             return;
         }
@@ -642,13 +642,15 @@ public sealed class VoiceSession : IAsyncDisposable
         {
             if (myTurn == _turnId) { _streamTurnId = 0; _streamEntry = null; }
             LlmLamp = StageLamp.Red;
+            // Record the ask failure before any paint. The 18:15 crash threw
+            // while drawing the error, so this log never ran and the UI
+            // exception replaced the original one.
+            OperationTrail.Leave("turn.failed", target + " " + ex.GetType().Name);
+            LogFailure(ex, "Turn to {Target} failed", target);
             Append(TranscriptKind.System, "", $"{target}: (no reply — {ex.Message})", showRemember: false);
             StatusText = "Chat failed";
             SetActivity("Ready");
             ShowError($"{target}: {ex.Message}");
-            OperationTrail.Leave("turn.failed", target + " " + ex.GetType().Name);
-            Log.Error(ex, "Turn to {Target} failed", target);
-            Touch();
             return;
         }
         llm.Stop();
@@ -690,8 +692,8 @@ public sealed class VoiceSession : IAsyncDisposable
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
+                LogFailure(ex, "TTS failed");
                 ShowError($"Speech output failed: {ex.Message}");
-                Log.Warning(ex, "TTS failed");
             }
             ttsMs = tts.ElapsedMilliseconds;
             TtsLamp = StageLamp.Dim;
@@ -735,9 +737,10 @@ public sealed class VoiceSession : IAsyncDisposable
                 }
                 break;
             case "tool_call":
-                AddLog($"Tool: {evt.Text}");
-                OperationTrail.Leave("ui.tool", ToolCrumb(evt.Text));
-                SetActivity("Thinking…", $"using {evt.Text}");
+                var tool = ToolCrumb(evt.Text);
+                AddLog(tool == "unlisted" ? "Tool" : "Tool: " + tool);
+                OperationTrail.Leave("ui.tool", tool);
+                SetActivity("Thinking…", tool == "unlisted" ? "using a tool" : "using " + tool);
                 Touch();
                 break;
             case "backend_ready":
@@ -910,8 +913,8 @@ public sealed class VoiceSession : IAsyncDisposable
         try { await EnsureMicAsync(); }
         catch (Exception ex)
         {
+            LogFailure(ex, "Wake mode could not open the microphone");
             ShowError($"Microphone error: {ex.Message}");
-            Log.Error(ex, "Wake mode could not open the microphone");
             Mode = "ptt";
             Touch();
             return;
@@ -1121,7 +1124,41 @@ public sealed class VoiceSession : IAsyncDisposable
         Touch();
     }
 
-    private void Touch() => Changed?.Invoke();
+    /// <summary>
+    /// Serilog first, then the screen. A painter that throws must not replace
+    /// <see cref="Error"/> or escape onto the UI dispatcher.
+    /// </summary>
+    private static void LogFailure(Exception ex, string template, params object?[] args)
+    {
+        try { Log.Error(ex, template, args); }
+        catch { /* the in-memory error is the user-facing record */ }
+    }
+
+    private void Touch() => Notify(Changed);
+
+    private void Notify(Action? handler)
+    {
+        if (handler is null) return;
+        Delegate[] subscribers;
+        try { subscribers = handler.GetInvocationList(); }
+        catch (Exception ex)
+        {
+            NoteNotifyFailure(ex);
+            return;
+        }
+        foreach (var subscriber in subscribers)
+        {
+            try { ((Action)subscriber)(); }
+            catch (Exception ex) { NoteNotifyFailure(ex); }
+        }
+    }
+
+    private static void NoteNotifyFailure(Exception ex)
+    {
+        OperationTrail.Leave("ui.notify.failed", ex.GetType().Name);
+        try { Log.Error(ex, "UI notification failed"); }
+        catch { /* do not let logging replace the session error */ }
+    }
 
     private static bool SessionCopyIsMood(string mood) => mood is "natural" or "comfort" or "playful" or "flirty" or "focused";
 
