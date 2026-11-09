@@ -2,6 +2,7 @@ using System.Diagnostics;
 using AliceVoice.Core.Chat;
 using AliceVoice.Core.Stt;
 using AliceVoice.Core.Updates;
+using AliceVoice.Core.Logging;
 using AliceVoice.Core.Voice;
 using AliceVoice.Core.WakeWord;
 using AliceVoice.Universal.Audio;
@@ -80,10 +81,12 @@ public sealed class VoiceSession : IAsyncDisposable
     private DateTime _errorUntil;
     private DateTime _nextConversationPoll;
     private Action? _stopSpeech;
+    private readonly BridgeClientSettings? _bridgeClient;
 
     public VoiceSession(UniversalHost host, IVoiceBackendManager voice, IFleetChat chat, IVoiceProviderManager providers,
         IPcmMicrophone mic, IAppUpdater updater, ISoulGateway soul, IWakeSource wakeSource, VoiceAssignmentStore assignments,
-        IAliceConversation? conversation = null, SoulReloadHub? hub = null, Func<DateTime>? clock = null, Func<DateTime>? localClock = null)
+        IAliceConversation? conversation = null, SoulReloadHub? hub = null, Func<DateTime>? clock = null, Func<DateTime>? localClock = null,
+        BridgeClientSettings? bridgeClient = null)
     {
         _host = host;
         _voice = voice;
@@ -96,6 +99,7 @@ public sealed class VoiceSession : IAsyncDisposable
         _assignments = assignments;
         _conversation = conversation;
         _hub = hub;
+        _bridgeClient = bridgeClient;
         if (_conversation is not null) _conversation.Changed += () => ApplySharedSnapshot();
         _clock = clock ?? (() => DateTime.UtcNow);
         _local = localClock ?? (() => DateTime.Now);
@@ -164,6 +168,22 @@ public sealed class VoiceSession : IAsyncDisposable
     public string VoiceLabel { get; private set; } = "—";
     public string ConnectionLabel { get; private set; } = "offline";
     public string SettingsLine { get; private set; } = "";
+    public bool ShowBridgeEditor => _bridgeClient is not null;
+    public string BridgeHost => _bridgeClient?.Host ?? "";
+    public string BridgePort => _bridgeClient is null ? "" : _bridgeClient.Port.ToString();
+    public string BridgeStatus { get; private set; } = "Clients dial this Tailscale address. This device does not listen.";
+
+    /// <summary>Persist a client dial address. Returns an error to show, or null when saved.</summary>
+    public string? TrySaveBridge(string host, string portText)
+    {
+        if (_bridgeClient is null) return "This device is the Beast and does not dial a bridge.";
+        if (string.IsNullOrWhiteSpace(host)) return "Host is empty.";
+        if (!int.TryParse(portText.Trim(), out var port) || port is < 1 or > 65535) return "Port must be 1–65535.";
+        _bridgeClient.Save(host.Trim(), port);
+        BridgeStatus = $"Saved {_bridgeClient.Host}:{_bridgeClient.Port}. Connect uses this address.";
+        Touch();
+        return null;
+    }
     public string FooterAuth { get; private set; } = "—";
     public string LlmMode { get; private set; } = "alice_local";
     public string WsDisplay { get; private set; } = "api·off";
@@ -184,6 +204,7 @@ public sealed class VoiceSession : IAsyncDisposable
     public async Task InitializeAsync(CancellationToken ct = default)
     {
         if (!_initializing) return;
+        OperationTrail.Leave("session.init");
         _wake = await _wakeSource.OpenAsync(ct);
         HookWake(_wake);
         if (_wake.IsAvailable)
@@ -207,6 +228,7 @@ public sealed class VoiceSession : IAsyncDisposable
         Append(TranscriptKind.System, "", SessionCopy.Startup, showRemember: false);
         RefreshStatus();
         await ConnectAsync(force: false, ct);
+        OperationTrail.Leave("session.ready");
         Touch();
     }
 
@@ -231,11 +253,14 @@ public sealed class VoiceSession : IAsyncDisposable
         Touch();
         try
         {
+            if (IsAliceLocal && _bridgeClient is not null)
+                await _bridgeClient.EnsureReachableAsync(ct);
             if (IsAliceLocal)
             {
                 if (force && _voice.CurrentKind == VoiceBackendKind.AliceLocal) await _voice.ReconnectAsync(ct);
                 else await _voice.SwitchToAsync(VoiceBackendKind.AliceLocal, ct: ct);
                 SetConnected(true);
+                Error = null;
                 StatusText = "Alice LOCAL";
                 SetActivity("Ready", "Alice LOCAL · local (Ollama)");
             }
@@ -243,6 +268,7 @@ public sealed class VoiceSession : IAsyncDisposable
             {
                 var ok = await _chat.IsReachableAsync(member, ct);
                 SetConnected(ok);
+                if (ok) Error = null;
                 StatusText = ok
                     ? $"{member.DisplayName} reachable"
                     : $"{member.DisplayName} not reachable ({(_chat.HasApiKey ? "not served / key rejected" : "no API_SERVER_KEY")})";
@@ -254,8 +280,9 @@ public sealed class VoiceSession : IAsyncDisposable
             SetConnected(false);
             StatusText = "Not connected";
             SetActivity("Offline", ex.Message);
+            OperationTrail.Leave("session.connect.failed", ex.GetType().Name);
+            LogFailure(ex, "Connect failed");
             ShowError($"Connect failed: {ex.Message}");
-            Log.Error(ex, "Connect failed");
         }
         RefreshStatus();
         Touch();
@@ -263,6 +290,7 @@ public sealed class VoiceSession : IAsyncDisposable
 
     public void Disconnect()
     {
+        CancelTurn();
         SetConnected(false);
         StatusText = "Ready";
         RefreshStatus();
@@ -388,8 +416,8 @@ public sealed class VoiceSession : IAsyncDisposable
         catch (Exception ex)
         {
             StatusText = "Voice test failed";
+            LogFailure(ex, "TTS test failed");
             ShowError($"Voice test failed ({profile.Provider}): {ex.Message}");
-            Log.Warning(ex, "TTS test failed");
         }
         finally { TtsLamp = StageLamp.Dim; Touch(); }
     }
@@ -487,7 +515,7 @@ public sealed class VoiceSession : IAsyncDisposable
             _ptt.Reset();
             _ = FinishUtteranceAsync();
         }
-        MeterChanged?.Invoke();
+        Notify(MeterChanged);
         if (clearError) Touch();
     }
 
@@ -537,8 +565,8 @@ public sealed class VoiceSession : IAsyncDisposable
             _utterance.Cancel();
             await StopMicAsync();
             TalkButtonText = "🎤 Talk";
+            LogFailure(ex, "PTT failed");
             ShowError($"Microphone error: {ex.Message}");
-            Log.Error(ex, "PTT failed");
             ResumeWakeIfIdle();
         }
         Touch();
@@ -577,8 +605,8 @@ public sealed class VoiceSession : IAsyncDisposable
             SttLamp = StageLamp.Red;
             StatusText = "Transcription failed";
             SetActivity("Ready");
+            LogFailure(ex, "STT failed");
             ShowError($"Speech-to-text failed: {ex.Message}");
-            Log.Error(ex, "STT failed");
             Touch();
             return;
         }
@@ -600,6 +628,7 @@ public sealed class VoiceSession : IAsyncDisposable
         var target = TargetName;
         var total = Stopwatch.StartNew();
         var sharedLocal = IsAliceLocal && _conversation is not null;
+        OperationTrail.Leave("turn.start", target);
         var userLine = Append(TranscriptKind.User, "You", $"{text} → {target}", showRemember: false);
         if (sharedLocal) userLine.PendingShared = true;
         StatusText = $"Talking to {target}…";
@@ -629,19 +658,31 @@ public sealed class VoiceSession : IAsyncDisposable
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            KeepAskedText();
+            OperationTrail.Leave("turn.cancel", target);
             AddLog("Turn cancelled");
+            if (myTurn == _turnId)
+            {
+                StatusText = "Stopped";
+                SetActivity("Ready");
+                Touch();
+            }
             return;
         }
         catch (Exception ex)
         {
+            KeepAskedText();
             if (myTurn == _turnId) { _streamTurnId = 0; _streamEntry = null; }
             LlmLamp = StageLamp.Red;
+            // Record the ask failure before any paint. The 18:15 crash threw
+            // while drawing the error, so this log never ran and the UI
+            // exception replaced the original one.
+            OperationTrail.Leave("turn.failed", target + " " + ex.GetType().Name);
+            LogFailure(ex, "Turn to {Target} failed", target);
             Append(TranscriptKind.System, "", $"{target}: (no reply — {ex.Message})", showRemember: false);
             StatusText = "Chat failed";
             SetActivity("Ready");
             ShowError($"{target}: {ex.Message}");
-            Log.Error(ex, "Turn to {Target} failed", target);
-            Touch();
             return;
         }
         llm.Stop();
@@ -683,8 +724,8 @@ public sealed class VoiceSession : IAsyncDisposable
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
+                LogFailure(ex, "TTS failed");
                 ShowError($"Speech output failed: {ex.Message}");
-                Log.Warning(ex, "TTS failed");
             }
             ttsMs = tts.ElapsedMilliseconds;
             TtsLamp = StageLamp.Dim;
@@ -693,9 +734,21 @@ public sealed class VoiceSession : IAsyncDisposable
 
         Latency.Add(new TurnTiming(target, sttMs, llm.ElapsedMilliseconds, ttft < 0 ? llm.ElapsedMilliseconds : ttft, ttsMs, sttMs + total.ElapsedMilliseconds));
         StatusText = $"Replied from {target}";
+        OperationTrail.Leave("turn.end", target);
         SetActivity("Ready", target);
         RefreshStatus();
         Touch();
+    }
+
+    /// <summary>Tool names are short identifiers. Anything else is omitted so a breadcrumb cannot carry arguments.</summary>
+    private static string ToolCrumb(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text) || text.Length > 64) return "unlisted";
+        foreach (var c in text)
+        {
+            if (!char.IsLetterOrDigit(c) && c is not ('_' or '-' or '.')) return "unlisted";
+        }
+        return text;
     }
 
     private void OnVoiceEvent(BackendEvent evt)
@@ -716,8 +769,11 @@ public sealed class VoiceSession : IAsyncDisposable
                 }
                 break;
             case "tool_call":
-                AddLog($"Tool: {evt.Text}");
-                SetActivity("Thinking…", $"using {evt.Text}");
+                if (_streamEntry is not null) _streamEntry.Text = "";
+                var tool = ToolCrumb(evt.Text);
+                AddLog(tool == "unlisted" ? "Tool" : "Tool: " + tool);
+                OperationTrail.Leave("ui.tool", tool);
+                SetActivity("Thinking…", tool == "unlisted" ? "using a tool" : "using " + tool);
                 Touch();
                 break;
             case "backend_ready":
@@ -890,8 +946,8 @@ public sealed class VoiceSession : IAsyncDisposable
         try { await EnsureMicAsync(); }
         catch (Exception ex)
         {
+            LogFailure(ex, "Wake mode could not open the microphone");
             ShowError($"Microphone error: {ex.Message}");
-            Log.Error(ex, "Wake mode could not open the microphone");
             Mode = "ptt";
             Touch();
             return;
@@ -1018,11 +1074,27 @@ public sealed class VoiceSession : IAsyncDisposable
         var cts = _turnCts;
         _turnCts = null;
         if (cts is null) return;
+        _turnId++;
         try { cts.Cancel(); } catch { }
         try { _stopSpeech?.Invoke(); } catch { }
         cts.Dispose();
         _streamTurnId = 0;
         _streamEntry = null;
+        KeepAskedText();
+    }
+
+    /// <summary>
+    /// A cancelled or failed ask is not part of the shared transcript.
+    /// Leave the question on screen; the next snapshot only replaces lines still marked in flight.
+    /// </summary>
+    private void KeepAskedText()
+    {
+        lock (_gate)
+        {
+            foreach (var entry in _transcript)
+                if (entry.PendingShared && entry.Kind == TranscriptKind.User)
+                    entry.PendingShared = false;
+        }
     }
 
     private void ApplySensitivity(double value, bool writeEngine)
@@ -1101,7 +1173,41 @@ public sealed class VoiceSession : IAsyncDisposable
         Touch();
     }
 
-    private void Touch() => Changed?.Invoke();
+    /// <summary>
+    /// Serilog first, then the screen. A painter that throws must not replace
+    /// <see cref="Error"/> or escape onto the UI dispatcher.
+    /// </summary>
+    private static void LogFailure(Exception ex, string template, params object?[] args)
+    {
+        try { Log.Error(ex, template, args); }
+        catch { /* the in-memory error is the user-facing record */ }
+    }
+
+    private void Touch() => Notify(Changed);
+
+    private void Notify(Action? handler)
+    {
+        if (handler is null) return;
+        Delegate[] subscribers;
+        try { subscribers = handler.GetInvocationList(); }
+        catch (Exception ex)
+        {
+            NoteNotifyFailure(ex);
+            return;
+        }
+        foreach (var subscriber in subscribers)
+        {
+            try { ((Action)subscriber)(); }
+            catch (Exception ex) { NoteNotifyFailure(ex); }
+        }
+    }
+
+    private static void NoteNotifyFailure(Exception ex)
+    {
+        OperationTrail.Leave("ui.notify.failed", ex.GetType().Name);
+        try { Log.Error(ex, "UI notification failed"); }
+        catch { /* do not let logging replace the session error */ }
+    }
 
     private static bool SessionCopyIsMood(string mood) => mood is "natural" or "comfort" or "playful" or "flirty" or "focused";
 

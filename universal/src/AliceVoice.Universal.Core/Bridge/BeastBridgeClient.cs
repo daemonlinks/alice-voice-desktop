@@ -17,28 +17,31 @@ namespace AliceVoice.Universal.Bridge;
 public sealed class BeastBridgeClient : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
-    private readonly BeastServiceUrls _urls;
+    private readonly BridgeEndpoint _endpoint;
     private readonly HttpClient _http;
     private readonly bool _owns;
 
     public BeastBridgeClient(BeastServiceUrls urls, HttpClient? http = null)
+        : this(new BridgeEndpoint(urls.Host, urls.BridgePort), http) { }
+
+    public BeastBridgeClient(BridgeEndpoint endpoint, HttpClient? http = null)
     {
-        _urls = urls;
+        _endpoint = endpoint;
         _owns = http is null;
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
     }
 
-    public BeastServiceUrls Urls => _urls;
+    public BeastServiceUrls Urls => _endpoint.Urls;
 
     public async Task<BridgeHealth> HealthAsync(CancellationToken ct = default)
     {
-        var raw = await _http.GetStringAsync(_urls.Health, ct);
+        var raw = await _http.GetStringAsync(Urls.Health, ct);
         return JsonSerializer.Deserialize<BridgeHealth>(raw, Json) ?? new BridgeHealth(false, "", false);
     }
 
     public async Task<string> WarmSttAsync(CancellationToken ct = default)
     {
-        using var resp = await _http.PostAsync(_urls.SttWarmup, new StringContent(""), ct);
+        using var resp = await _http.PostAsync(Urls.SttWarmup, new StringContent(""), ct);
         var raw = await resp.Content.ReadAsStringAsync(ct);
         var dto = JsonSerializer.Deserialize<SttResponse>(raw, Json);
         if (!resp.IsSuccessStatusCode) throw new SttException(dto?.Error ?? $"STT bridge warmup failed ({(int)resp.StatusCode})");
@@ -51,7 +54,7 @@ public sealed class BeastBridgeClient : IDisposable
         Buffer.BlockCopy(pcm, 0, bytes, 0, bytes.Length);
         using var content = new ByteArrayContent(bytes);
         content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        using var resp = await _http.PostAsync(_urls.Stt, content, ct);
+        using var resp = await _http.PostAsync(Urls.Stt, content, ct);
         var raw = await resp.Content.ReadAsStringAsync(ct);
         var dto = JsonSerializer.Deserialize<SttResponse>(raw, Json);
         if (!resp.IsSuccessStatusCode || !string.IsNullOrEmpty(dto?.Error))
@@ -61,7 +64,7 @@ public sealed class BeastBridgeClient : IDisposable
 
     public async Task<SoulDocument> GetSoulAsync(CancellationToken ct = default)
     {
-        var raw = await _http.GetStringAsync(_urls.Soul, ct);
+        var raw = await _http.GetStringAsync(Urls.Soul, ct);
         var dto = JsonSerializer.Deserialize<SoulResponse>(raw, Json) ?? throw new InvalidOperationException("Empty SOUL response");
         if (!string.IsNullOrEmpty(dto.Error)) throw new InvalidOperationException(dto.Error);
         return new SoulDocument(dto.Text ?? "", dto.Path ?? "", dto.CreatedFromTemplate);
@@ -70,7 +73,7 @@ public sealed class BeastBridgeClient : IDisposable
     public async Task<SoulSaveResult> SaveSoulAsync(string text, CancellationToken ct = default)
     {
         using var content = new StringContent(text, Encoding.UTF8, "text/plain");
-        using var resp = await _http.PutAsync(_urls.Soul, content, ct);
+        using var resp = await _http.PutAsync(Urls.Soul, content, ct);
         var raw = await resp.Content.ReadAsStringAsync(ct);
         var dto = JsonSerializer.Deserialize<SoulSaveResponse>(raw, Json);
         if (!resp.IsSuccessStatusCode || !string.IsNullOrEmpty(dto?.Error))
@@ -80,7 +83,7 @@ public sealed class BeastBridgeClient : IDisposable
 
     public async Task LocalConnectAsync(CancellationToken ct = default)
     {
-        using var resp = await _http.PostAsync(_urls.LocalConnect, new StringContent(""), ct);
+        using var resp = await _http.PostAsync(Urls.LocalConnect, new StringContent(""), ct);
         var raw = await resp.Content.ReadAsStringAsync(ct);
         if (!resp.IsSuccessStatusCode)
             throw new InvalidOperationException(ErrorOf(raw) ?? $"Alice LOCAL bridge failed ({(int)resp.StatusCode})");
@@ -88,8 +91,20 @@ public sealed class BeastBridgeClient : IDisposable
 
     public async Task<string> AskLocalAsync(string prompt, AskOptions? options, Action<BackendEvent>? onEvent, CancellationToken ct = default)
     {
+        try
+        {
+            return await AskLocalCoreAsync(prompt, options, onEvent, ct);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException("The Beast bridge did not answer in time.");
+        }
+    }
+
+    private async Task<string> AskLocalCoreAsync(string prompt, AskOptions? options, Action<BackendEvent>? onEvent, CancellationToken ct)
+    {
         var payload = new AskRequest(prompt, options?.MaxTokens, options?.StyleHint);
-        using var req = new HttpRequestMessage(HttpMethod.Post, _urls.LocalAsk) { Content = JsonContent.Create(payload, options: Json) };
+        using var req = new HttpRequestMessage(HttpMethod.Post, Urls.LocalAsk) { Content = JsonContent.Create(payload, options: Json) };
         using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
         await using var stream = await resp.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
@@ -109,25 +124,27 @@ public sealed class BeastBridgeClient : IDisposable
         if (final is null && error is not null) throw new InvalidOperationException(error);
         if (final is null && !resp.IsSuccessStatusCode)
             throw new InvalidOperationException($"Alice LOCAL bridge failed ({(int)resp.StatusCode})");
-        return final ?? "";
+        if (final is null)
+            throw new InvalidOperationException("Alice LOCAL bridge returned no reply.");
+        return final;
     }
 
     public async Task<bool> RememberAsync(string content, CancellationToken ct = default)
     {
-        using var resp = await _http.PostAsJsonAsync(_urls.LocalRemember, new RememberRequest(content), Json, ct);
+        using var resp = await _http.PostAsJsonAsync(Urls.LocalRemember, new RememberRequest(content), Json, ct);
         var dto = await resp.Content.ReadFromJsonAsync<OkResponse>(Json, ct);
         return resp.IsSuccessStatusCode && dto?.Ok == true;
     }
 
     public async Task<TranscriptResponse> TranscriptAsync(CancellationToken ct = default)
     {
-        var raw = await _http.GetStringAsync(_urls.LocalTranscript, ct);
+        var raw = await _http.GetStringAsync(Urls.LocalTranscript, ct);
         return JsonSerializer.Deserialize<TranscriptResponse>(raw, Json) ?? new TranscriptResponse(0, new List<SharedTurn>());
     }
 
     public async Task LocalCommandAsync(string type, CancellationToken ct = default)
     {
-        using var resp = await _http.PostAsJsonAsync(_urls.LocalCommand, new CommandRequest(type), Json, ct);
+        using var resp = await _http.PostAsJsonAsync(Urls.LocalCommand, new CommandRequest(type), Json, ct);
         if (!resp.IsSuccessStatusCode)
         {
             var raw = await resp.Content.ReadAsStringAsync(ct);
@@ -137,7 +154,7 @@ public sealed class BeastBridgeClient : IDisposable
 
     public async Task<string> FleetSendAsync(string member, string message, CancellationToken ct = default)
     {
-        using var resp = await _http.PostAsJsonAsync(_urls.FleetSend, new FleetSendRequest(member, message), Json, ct);
+        using var resp = await _http.PostAsJsonAsync(Urls.FleetSend, new FleetSendRequest(member, message), Json, ct);
         var raw = await resp.Content.ReadAsStringAsync(ct);
         var dto = JsonSerializer.Deserialize<TextResponse>(raw, Json);
         if (!resp.IsSuccessStatusCode || !string.IsNullOrEmpty(dto?.Error))
@@ -147,27 +164,27 @@ public sealed class BeastBridgeClient : IDisposable
 
     public async Task<ReachableResponse> FleetReachableAsync(string member, CancellationToken ct = default)
     {
-        using var resp = await _http.PostAsJsonAsync(_urls.FleetReachable, new MemberRequest(member), Json, ct);
+        using var resp = await _http.PostAsJsonAsync(Urls.FleetReachable, new MemberRequest(member), Json, ct);
         var raw = await resp.Content.ReadAsStringAsync(ct);
         return JsonSerializer.Deserialize<ReachableResponse>(raw, Json) ?? new ReachableResponse(false, false);
     }
 
     public async Task FleetResetAsync(string? member, CancellationToken ct = default)
     {
-        using var resp = await _http.PostAsJsonAsync(_urls.FleetReset, new MemberRequest(member), Json, ct);
+        using var resp = await _http.PostAsJsonAsync(Urls.FleetReset, new MemberRequest(member), Json, ct);
         resp.EnsureSuccessStatusCode();
     }
 
     public async Task<IReadOnlyList<string>> PiperVoicesAsync(CancellationToken ct = default)
     {
-        var raw = await _http.GetStringAsync(_urls.PiperVoices, ct);
+        var raw = await _http.GetStringAsync(Urls.PiperVoices, ct);
         var dto = JsonSerializer.Deserialize<VoicesResponse>(raw, Json);
         return dto?.Voices ?? new List<string>();
     }
 
     public async Task<byte[]?> PiperAsync(string text, string voice, CancellationToken ct = default)
     {
-        using var resp = await _http.PostAsJsonAsync(_urls.Piper, new PiperRequest(text, voice), Json, ct);
+        using var resp = await _http.PostAsJsonAsync(Urls.Piper, new PiperRequest(text, voice), Json, ct);
         if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
         if (!resp.IsSuccessStatusCode)
         {

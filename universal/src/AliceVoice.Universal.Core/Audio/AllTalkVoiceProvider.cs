@@ -18,19 +18,24 @@ public sealed class AllTalkVoiceProvider : IVoiceProvider, IDisposable
     private const string DefaultVoice = "female_07.wav";
     private readonly HttpClient _http;
     private readonly IPcmPlayer _playback;
-    private readonly string _baseUrl;
+    private readonly Func<string> _baseUrl;
     private readonly bool _ownsClient;
 
     public AllTalkVoiceProvider(IPcmPlayer playback, AliceVoiceOptions options, HttpClient? http = null)
-        : this(playback, options.ResolvedAllTalkUrl, http) { }
+        : this(playback, () => options.ResolvedAllTalkUrl, http) { }
 
     public AllTalkVoiceProvider(IPcmPlayer playback, string baseUrl, HttpClient? http = null)
+        : this(playback, () => baseUrl, http) { }
+
+    private AllTalkVoiceProvider(IPcmPlayer playback, Func<string> baseUrl, HttpClient? http)
     {
         _playback = playback;
-        _baseUrl = baseUrl.TrimEnd('/');
+        _baseUrl = baseUrl;
         _ownsClient = http is null;
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(180) };
     }
+
+    private string BaseUrl => _baseUrl().TrimEnd('/');
 
     public VoiceProviderKind Kind => VoiceProviderKind.AllTalk;
     public string DisplayName => "AllTalk";
@@ -39,7 +44,7 @@ public sealed class AllTalkVoiceProvider : IVoiceProvider, IDisposable
     {
         try
         {
-            var json = await _http.GetStringAsync($"{_baseUrl}/api/voices", ct);
+            var json = await _http.GetStringAsync($"{BaseUrl}/api/voices", ct);
             using var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("voices", out var arr))
                 return arr.EnumerateArray().Select(v => v.GetString() ?? "").Where(s => s.Length > 0).ToList();
@@ -83,7 +88,7 @@ public sealed class AllTalkVoiceProvider : IVoiceProvider, IDisposable
             ["autoplay_volume"] = "0.1"
         });
 
-        using var resp = await _http.PostAsync($"{_baseUrl}/api/tts-generate", form, ct);
+        using var resp = await _http.PostAsync($"{BaseUrl}/api/tts-generate", form, ct);
         if (!resp.IsSuccessStatusCode)
         {
             Log.Warning("AllTalk generate failed: {Code}", (int)resp.StatusCode);
@@ -100,7 +105,7 @@ public sealed class AllTalkVoiceProvider : IVoiceProvider, IDisposable
         var audioUrl = urlEl.GetString();
         if (string.IsNullOrEmpty(audioUrl)) return null;
         if (!Uri.TryCreate(audioUrl, UriKind.Absolute, out _))
-            audioUrl = _baseUrl + (audioUrl.StartsWith('/') ? "" : "/") + audioUrl;
+            audioUrl = BaseUrl + (audioUrl.StartsWith('/') ? "" : "/") + audioUrl;
 
         var wav = await _http.GetByteArrayAsync(audioUrl, ct);
         Log.Information("AllTalk generated {Bytes} bytes", wav.Length);

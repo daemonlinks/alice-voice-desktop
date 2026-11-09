@@ -65,6 +65,35 @@ public class BridgeTests
         Assert.Null(await client.PiperAsync("hello", "voice"));
     }
 
+    [Fact]
+    public async Task ABlankOrFailedBridgeAskIsAnErrorNotSilence()
+    {
+        var port = FreePort();
+        using var listener = new HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        var serve = Task.Run(async () =>
+        {
+            var blank = await listener.GetContextAsync();
+            blank.Response.StatusCode = 200;
+            blank.Response.Close();
+            var failed = await listener.GetContextAsync();
+            var bytes = System.Text.Encoding.UTF8.GetBytes("{\"type\":\"error\",\"text\":\"model unloaded\"}\n");
+            failed.Response.StatusCode = 200;
+            failed.Response.ContentType = "application/x-ndjson";
+            await failed.Response.OutputStream.WriteAsync(bytes);
+            failed.Response.Close();
+        });
+
+        using var client = new BeastBridgeClient(new BeastServiceUrls("127.0.0.1", port));
+        var missing = await Assert.ThrowsAsync<InvalidOperationException>(() => client.AskLocalAsync("hi", null, null, CancellationToken.None));
+        Assert.Contains("no reply", missing.Message);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => client.AskLocalAsync("hi", null, null, CancellationToken.None));
+        Assert.Equal("model unloaded", error.Message);
+        listener.Stop();
+        await serve;
+    }
+
     private static int FreePort()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);

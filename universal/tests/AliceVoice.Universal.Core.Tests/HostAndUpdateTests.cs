@@ -51,6 +51,25 @@ public class BeastEndpointTests
     }
 
     [Fact]
+    public void AndroidNeverListensEvenIfABeastBindIsConfigured()
+    {
+        var env = new Dictionary<string, string?>
+        {
+            ["ALICEVOICE_BEAST_HOST"] = "100.64.237.3",
+            ["ALICEVOICE_BRIDGE_BIND"] = "100.64.237.3:8765"
+        };
+        var android = UniversalHost.Prepare(PlatformHostKind.Android, Layout(), key => env.GetValueOrDefault(key));
+        Assert.False(android.BridgeEnabled);
+        Assert.Null(android.BridgeBindHost);
+        Assert.Equal("100.64.237.3", android.Remote!.Host);
+
+        var beast = UniversalHost.Prepare(PlatformHostKind.Windows, Layout(), key => env.GetValueOrDefault(key));
+        Assert.True(beast.BridgeEnabled);
+        Assert.Equal("100.64.237.3", beast.BridgeBindHost);
+        Assert.Equal(8765, beast.BridgeBindPort);
+    }
+
+    [Fact]
     public void GpuZeroIsNeverTheVoiceGpu()
     {
         var gpus = new[]

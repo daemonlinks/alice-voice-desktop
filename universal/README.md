@@ -86,13 +86,180 @@ user who runs the app (this is the usual Windows step, not a Tailscale step):
 netsh http add urlacl url=http://100.x.y.z:8765/ user=$env:USERNAME
 ```
 
-The phone's default `ALICEVOICE_BEAST_HOST` is the Tailscale MagicDNS name
-`ahc-the-beast`. Override it with the Beast's `100.x` address if MagicDNS is
-off. The phone does not copy the `Mirrored` scene folder or the PC's
+The phone dials `100.64.237.3` unless Settings (or `ALICEVOICE_BEAST_HOST`)
+names another host. The phone does not copy the `Mirrored` scene folder or the PC's
 voice-assignment file. AllTalk and Piper still run on the Beast. Android's own
 speech engine is a separate provider (`AndroidSpeech` = 3 in
 `voice-assignments.json`) and can be assigned on the phone. Windows ignores
 that value and keeps AllTalk = 0, SAPI = 1, Piper = 2.
+
+## Crash diagnostics
+
+WinUI turns a managed exception on the UI thread into a native stowed
+exception (`0xc000027b` from `Microsoft.UI.Xaml.dll`). That path does not
+raise `AppDomain.UnhandledException` and does not write a .NET Runtime 1026
+event, so the daily log can stay at startup lines through the crash. App U
+records the exception before the process is allowed to exit.
+
+Hooks, registered before `InitializeComponent` on Windows and before
+`CreateMauiApp` work on both heads:
+
+| Hook | What it means |
+|---|---|
+| `Microsoft.UI.Xaml.Application.UnhandledException` | UI-thread exception. `Handled` is left **false**, so the process still terminates. |
+| `AppDomain.UnhandledException` | Fatal process exception. Logged and flushed. The process still terminates. |
+| `TaskScheduler.UnobservedTaskException` | Background task that nobody observed. Written as a non-fatal failure and marked observed, which is the previous behavior. It does not tear the process down. |
+| `AndroidEnvironment.UnhandledExceptionRaiser` | Android fatal path. `Handled` is left **false**. |
+
+`MauiProgram.CreateMauiApp` reports an exception and then rethrows it, so a
+startup failure is on disk and the app still fails to launch. A bridge that
+refuses to bind, a session that fails to initialize, and a shutdown failure
+are caught as they were before (the window stays up, or shutdown continues)
+and are also written to a failure file.
+
+Each report is written with `FileOptions.WriteThrough` and `Flush(true)`
+**before** Serilog is used. Serilog then gets the same redacted text (`FTL`
+for a fatal report, `ERR` for a caught failure) and a fatal report calls
+`Log.CloseAndFlush`. If the crash directory cannot be created, or Serilog is
+already shut down, the file still goes to the fallback directory. A report
+that re-enters the handler writes one short `recursive-*.txt` marker and does
+not loop. The same exception object, or the same type/message/stack within
+two seconds, is written once. Fatal UI exceptions are not marked handled.
+
+The report contains the timestamp, app name, assembly version, process name
+and id, process path, managed thread id and name, source (`ui`, `domain`,
+`task`, `startup`, `shutdown`, `android`, `background`), context, framework,
+OS, and for the exception: type, message, HResult (decimal and hex),
+`Source`, stack, `ToString()`, and inner exceptions (`AggregateException`
+includes every inner). It also copies the in-memory operation trail
+(startup, bridge, turn, `tool.start` / `tool.end` / `tool.failed` with the
+tool name and result length only).
+
+Not written by this path: prompts, tool arguments, tool results, SOUL text,
+tokens, API keys, or the process environment. Values that look like
+`api_key=…`, `Bearer …`, JWTs, `sk-…` keys, JSON fields such as `args`,
+`content`, `query`, `prompt`, or `[TOOL name result: …]` are replaced.
+Review a file before sharing it anyway. The bridge bind rule is unchanged:
+Tailscale only, unless `ALICEVOICE_BRIDGE_ALLOW_UNSAFE_BIND=1`.
+
+### Where the files are
+
+Windows (same folders the WinUI app uses):
+
+| What | Path |
+|---|---|
+| Daily log | `%LOCALAPPDATA%\AliceVoice\logs\alice-voice-YYYYMMDD.log` (14 kept, flushed every event) |
+| Fatal report | `%LOCALAPPDATA%\AliceVoice\crash\crash-YYYYMMDD-HHMMSSfff-<source>-p<pid>-n<seq>.txt` |
+| Caught startup / shutdown / task failure | `%LOCALAPPDATA%\AliceVoice\crash\failure-YYYYMMDD-HHMMSSfff-<source>-p<pid>-n<seq>.txt` |
+| Handler re-entry marker | `%LOCALAPPDATA%\AliceVoice\crash\recursive-YYYYMMDD-HHMMSSfff.txt` |
+| Fallback when `crash` cannot be written | `%TEMP%\AliceVoice\crash\` (same file names) |
+
+32 diagnostic files are kept in each directory; older `crash-`, `failure-`,
+and `recursive-` files are deleted. Android uses the same names under the
+app private directory: `<files>/logs` and `<files>/crash`, with the same
+temp fallback.
+
+### Checking a crash on the Beast
+
+This repo does not install onto the Beast. After you copy a Windows build
+there and the process dies:
+
+1. Open the newest file in `%LOCALAPPDATA%\AliceVoice\crash\`. It should name
+   the exception type, message, HResult, stack, and inners, plus breadcrumbs
+   such as `tool.start honcho_search` and, if the tool returned,
+   `tool.end honcho_search chars=<n>`.
+2. The daily log should now contain a `[FTL]` line beginning
+   `Diagnostic ui` (or `domain` / `startup`) and the same report. A crash
+   that previously left only startup lines is the case this is meant to catch.
+3. Windows can still write Application Error 1000 (`Microsoft.UI.Xaml.dll`,
+   `0xc000027b`). That event is expected. The managed exception is in the
+   crash file, not in a .NET Runtime 1026 event.
+4. Confirm the file does not contain the prompt, the tool arguments, or the
+   tool result body.
+
+Build the Windows head on Windows (this Linux environment has no Windows
+SDK, so it cannot produce that binary):
+
+```powershell
+dotnet workload install maui
+dotnet test universal/tests/AliceVoice.Universal.Core.Tests/AliceVoice.Universal.Core.Tests.csproj -c Debug
+dotnet build universal/src/AliceVoice.Universal.App/AliceVoice.Universal.App.csproj -c Release -f net10.0-windows10.0.19041.0
+dotnet publish universal/src/AliceVoice.Universal.App/AliceVoice.Universal.App.csproj -c Release -f net10.0-windows10.0.19041.0
+```
+
+Do not pass `-r win-x64` or `-p:RuntimeIdentifier=win-x64`. That restore looks
+for `Microsoft.NETCore.App.Runtime.Mono.win-x64` and fails with NU1102. The
+Windows head sets `SelfContained=false` and `UseMonoRuntime=false`, so the
+publish command above is framework-dependent and unpackaged. Output is under
+`universal/src/AliceVoice.Universal.App/bin/Release/net10.0-windows10.0.19041.0/win10-x64/publish/`.
+Copy that folder onto the Beast yourself (the running copy has been
+`D:\Apps\AliceVoice.AppU`). Do not point the bridge at a public address.
+
+A paint failure (for example a missing style while drawing the transcript)
+is written as a non-fatal `failure-` file and must not replace the session
+error or terminate the process. Fatal UI exceptions that still escape are
+left unhandled.
+
+## Desktop icon, Start menu, and which PC listens
+
+The icon is the existing Alice mark. `assets/alice-voice.ico` is embedded in
+the Windows exe for the taskbar and shortcuts. `assets/alice-voice-master.png`
+is the same artwork for the Android launcher, the round crop, and the splash.
+The resizetizer cannot use that hyphenated file name, so the project links it
+as `appicon` and `splash`. Android TV centers `appicon` on a black 16:9 banner. Android TV uses that same icon centered on a black 16:9 banner.
+Nothing is pinned to the taskbar, the Start menu, or an Android home screen.
+Windows gets a desktop shortcut and a Start menu shortcut. Android gets the
+normal launcher entry, and a TV launcher entry, from the package itself.
+
+The shortcut target is `AliceVoice.Universal.App.exe`. It is a windowed
+program, so no console stays open, and it is not a `.ps1`. The working
+directory is the folder that contains the exe, which is where `scripts\` and
+`models\wakeword\` are copied. A second launch activates the window titled
+**Alice Voice App U** instead of starting another process (and another bridge).
+
+Publish on Windows. Do not pass `-r win-x64`.
+
+```powershell
+dotnet publish universal/src/AliceVoice.Universal.App/AliceVoice.Universal.App.csproj -c Release -f net10.0-windows10.0.19041.0
+```
+
+Copy the folder
+`universal/src/AliceVoice.Universal.App/bin/Release/net10.0-windows10.0.19041.0/win10-x64/publish/`
+onto a stable path on that PC. Do not delete
+`%LOCALAPPDATA%\AliceVoice\` or `%ProgramData%\AliceVoice\` — settings,
+logs, and the SOUL file live there, not in the publish folder.
+
+| PC | Install the exe here | Bridge |
+|---|---|---|
+| Beast | `D:\Apps\AliceVoice.AppU` (the copy already running) | Keep `"BridgeBind": "100.64.237.3:8765"` in `%LOCALAPPDATA%\AliceVoice\appsettings.json`. That address is Tailscale. It is not compiled into the app. |
+| Tuner, WS03, WS04, SP01 | Each machine's own stable folder | Do **not** set `BridgeBind` and do **not** set `ALICEVOICE_BRIDGE_BIND`. The app will not listen. |
+
+On each PC, once, from the install folder:
+
+```powershell
+.\AliceVoice.Universal.App.exe --install-shortcuts
+```
+
+That writes, and replaces if you run it again:
+
+- `%USERPROFILE%\Desktop\Alice Voice.lnk`
+- `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Alice Voice.lnk`
+
+If Beast's bind currently exists only as an environment variable, run that
+command in a shell where `ALICEVOICE_BRIDGE_BIND` is `100.64.237.3:8765` and
+the settings file does not already contain `BridgeBind`. The command then
+saves that Tailscale address into appsettings. It will not replace a bind
+that is already there, and it will not save a LAN or public address. Other
+PCs should run it with the variable unset. After that, start the app from
+the desktop icon. Later updates replace the files in the stable folder and
+leave the shortcuts alone, unless the exe moves.
+
+The one-time `netsh http add urlacl` for `http://100.64.237.3:8765/` stays a
+Beast-only step. It is not part of the shortcut.
+
+Android and Android TV pick up the icon, round icon, banner, and launcher
+entries from the APK. Installing or updating the package is enough. Do not
+place the icon on a home screen by hand.
 
 ## Android head
 
@@ -106,8 +273,13 @@ A Debug APK is written under
 Install it with `adb install` (the `-Signed.apk` is the one the SDK signs
 with the debug key).
 
-On the phone, `ALICEVOICE_BEAST_HOST` defaults to `ahc-the-beast`. Set it to
-the Beast's Tailscale IPv4 (`100.x.y.z`) when MagicDNS is not available.
+On the phone, Connect dials the Beast's Tailscale address `100.64.237.3`
+port 8765 first. The short name `ahc-the-beast` is only a fallback, because
+home DNS can turn it into `192.168.1.60`, where the bridge is not listening.
+Settings → Beast bridge shows the address and saves a change in the app's
+own `appsettings.json`, which updates do not wipe. A Windows PC that is not
+the Beast dials the same address and does not listen. The Beast keeps using
+local services while `BridgeBind` is set.
 `ALICEVOICE_BRIDGE_PORT` defaults to 8765. `ALICEVOICE_*` environment variables
 win over `appsettings.json` (see `appsettings.example.json`).
 

@@ -31,10 +31,11 @@ public static class UniversalServices
             options.ResolvedUpdateManifestUrl,
             packagePreference: host.Kind == PlatformHostKind.Android ? UpdatePackagePreference.Android : UpdatePackagePreference.Windows));
 
-        if (host.Kind == PlatformHostKind.Windows)
+        // The Beast listens and uses the local GPU. Every other head dials it.
+        if (host.Kind == PlatformHostKind.Windows && host.BridgeEnabled)
             AddWindowsBackends(services, host, options);
         else
-            AddAndroidBackends(services, host, options);
+            AddClientBackends(services, host, options);
 
         services.AddSingleton<IVoiceBackend>(_ => new LocalOllamaBackend(options));
         services.AddSingleton<IVoiceBackend>(_ => new AliceVoiceAgentBackend(options));
@@ -77,12 +78,15 @@ public static class UniversalServices
         }
     }
 
-    private static void AddAndroidBackends(IServiceCollection services, UniversalHost host, AliceVoiceOptions options)
+    private static void AddClientBackends(IServiceCollection services, UniversalHost host, AliceVoiceOptions options)
     {
         services.AddSingleton<IGpuSelector, NoLocalGpuSelector>();
         if (host.Remote is { } remote)
         {
-            services.AddSingleton(new BeastBridgeClient(remote));
+            var endpoint = new BridgeEndpoint(remote.Host, remote.BridgePort);
+            services.AddSingleton(endpoint);
+            services.AddSingleton(new BridgeClientSettings(endpoint, host.SettingsFile, options));
+            services.AddSingleton(sp => new BeastBridgeClient(sp.GetRequiredService<BridgeEndpoint>()));
             services.AddSingleton<IAliceConversation>(sp => new RemoteAliceConversation(sp.GetRequiredService<BeastBridgeClient>()));
             services.AddSingleton<ISttClient>(sp => new RemoteSttClient(sp.GetRequiredService<BeastBridgeClient>()));
             services.AddSingleton<ISoulGateway>(sp => new RemoteSoulGateway(sp.GetRequiredService<BeastBridgeClient>()));
