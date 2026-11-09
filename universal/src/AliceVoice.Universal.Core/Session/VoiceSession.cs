@@ -769,6 +769,7 @@ public sealed class VoiceSession : IAsyncDisposable
                 }
                 break;
             case "tool_call":
+                if (_streamEntry is not null) _streamEntry.Text = "";
                 var tool = ToolCrumb(evt.Text);
                 AddLog(tool == "unlisted" ? "Tool" : "Tool: " + tool);
                 OperationTrail.Leave("ui.tool", tool);

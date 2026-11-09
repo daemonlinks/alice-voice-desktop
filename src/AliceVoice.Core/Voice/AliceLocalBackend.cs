@@ -17,17 +17,26 @@ namespace AliceVoice.Core.Voice;
 public sealed class AliceLocalBackend : IVoiceBackend
 {
     private const int MaxToolTurns = 4;
+    private static readonly HashSet<string> KnownTools = new(StringComparer.Ordinal)
+    {
+        "honcho_search", "honcho_save", "honcho_forget", "search"
+    };
     private readonly AliceVoiceOptions _options;
     private readonly OllamaChatClient _ollama;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly ConversationHistory _history = new(20);
     private string _soul = "";
     private string? _soulPath;
+    private bool? _nativeTools;
+
+    /// <summary>Test seam. Production runs <c>alice_local_tools.py</c>.</summary>
+    internal Func<string, string, CancellationToken, Task<string>>? RunTool { get; set; }
 
     internal const string ToolDescriptions =
-        "You have access to these tools. To call one, reply with ONLY a JSON object " +
-        "of the form {\"tool\": \"<name>\", \"args\": {...}} and nothing else. " +
-        "After the tool result comes back, continue normally.\n" +
+        "You have access to these tools. To call one, reply with a JSON object " +
+        "of the form {\"tool\": \"<name>\", \"args\": {...}}. " +
+        "The object may follow a short sentence or sit in a code fence. " +
+        "After the tool result comes back, answer Master in ordinary speech and do not show the JSON.\n" +
         "- honcho_search: {\"query\": \"...\", \"limit\": 5} — search your own memory about Master.\n" +
         "- honcho_save: {\"content\": \"...\"} — save a fact about Master for future recall. " +
         "Call this IMMEDIATELY when Master tells you something to remember. Do NOT say you can't remember — you CAN.\n" +
@@ -127,51 +136,57 @@ public sealed class AliceLocalBackend : IVoiceBackend
             for (int turn = 0; turn < MaxToolTurns; turn++)
             {
                 var acc = new StringBuilder();
-                var reply = await _ollama.ChatAsync(Settings.OllamaUrl, Settings.Model, messages, options.MaxTokens, delta =>
+                var completion = await CompleteAsync(messages, options.MaxTokens, delta =>
                 {
                     acc.Append(delta);
                     var soFar = acc.ToString();
-                    // A reply that starts with "{" may be a tool call — don't show it.
-                    if (!soFar.TrimStart().StartsWith('{'))
+                    // A tool call, native or inline, must not appear in the bubble.
+                    if (!HoldsToolCall(soFar))
                         EventReceived?.Invoke(new BackendEvent("reply_partial", soFar));
                 }, ct);
 
-                if (TryParseToolCall(reply, out var tool, out var args))
+                var calls = completion.ToolCalls.Where(c => c.Name.Length > 0).Take(MaxToolTurns).ToList();
+                if (calls.Count == 0 && TryParseToolCall(completion.Content, out var inlineTool, out var inlineArgs))
+                    calls.Add(new OllamaToolCall(inlineTool, inlineArgs));
+                if (calls.Count == 0)
                 {
-                    var signature = tool + args;
-                    if (signature == lastToolCall)
-                    {
-                        // Same call twice in a row — stop the loop and ask for a plain answer.
-                        OperationTrail.Leave("tool.duplicate", tool);
-                        messages.Add(new ChatMessage("user", "[You already have that tool result. Answer Master directly now, without calling a tool.]"));
-                        lastToolCall = null;
-                        continue;
-                    }
-                    lastToolCall = signature;
-                    Log.Information("Alice LOCAL tool call: {Tool}", tool);
-                    EventReceived?.Invoke(new BackendEvent("tool_call", tool));
-                    OperationTrail.Leave("tool.start", tool);
+                    var spoken = completion.Content;
+                    _history.AddTurn(prompt, spoken);
+                    EventReceived?.Invoke(new BackendEvent("reply_text", spoken));
+                    return spoken;
+                }
+
+                var signature = string.Join("|", calls.Select(c => c.Name + c.ArgumentsJson));
+                if (signature == lastToolCall)
+                {
+                    OperationTrail.Leave("tool.duplicate", calls[0].Name);
+                    messages.Add(new ChatMessage("user", "[You already have that tool result. Answer Master directly now, without calling a tool.]"));
+                    lastToolCall = null;
+                    continue;
+                }
+                lastToolCall = signature;
+                foreach (var call in calls)
+                {
+                    Log.Information("Alice LOCAL tool call: {Tool}", call.Name);
+                    EventReceived?.Invoke(new BackendEvent("tool_call", call.Name));
+                    OperationTrail.Leave("tool.start", call.Name);
                     string result;
                     try
                     {
-                        result = await RunToolAsync(tool, args, ct);
+                        result = IsKnownTool(call.Name)
+                            ? await (RunTool ?? RunToolAsync)(call.Name, call.ArgumentsJson, ct)
+                            : UnknownToolResult(call.Name);
                     }
                     catch (Exception ex)
                     {
-                        OperationTrail.Leave("tool.failed", tool + " " + ex.GetType().Name);
+                        OperationTrail.Leave("tool.failed", call.Name + " " + ex.GetType().Name);
                         throw;
                     }
-                    // Length only. The result body can contain memory or search text.
-                    OperationTrail.Leave("tool.end", tool + " chars=" + result.Length);
-                    Log.Information("Alice LOCAL tool finished: {Tool} ({Chars} chars)", tool, result.Length);
-                    messages.Add(new ChatMessage("assistant", reply.Trim()));
-                    messages.Add(new ChatMessage("user", $"[TOOL {tool} result: {OllamaChatClient.Truncate(result, 4000)}]"));
-                    continue;
+                    OperationTrail.Leave("tool.end", call.Name + " chars=" + result.Length);
+                    Log.Information("Alice LOCAL tool finished: {Tool} ({Chars} chars)", call.Name, result.Length);
+                    messages.Add(new ChatMessage("assistant", BuildToolCall(call.Name, call.ArgumentsJson)));
+                    messages.Add(new ChatMessage("user", $"[TOOL {call.Name} result: {OllamaChatClient.Truncate(result, 4000)}]"));
                 }
-
-                _history.AddTurn(prompt, reply);
-                EventReceived?.Invoke(new BackendEvent("reply_text", reply));
-                return reply;
             }
 
             const string fallback = "Sorry Master, I got tangled up in my tools. Could you ask me again?";
@@ -194,28 +209,98 @@ public sealed class AliceLocalBackend : IVoiceBackend
         catch (JsonException) { return false; }
     }
 
+    internal static bool IsKnownTool(string tool) => KnownTools.Contains(tool);
+
+    internal static string UnknownToolResult(string tool)
+        => JsonSerializer.Serialize(new { error = "unknown tool: " + tool });
+
+    /// <summary>
+    /// A tool call is a JSON object with a string <c>tool</c> field. It may sit
+    /// after prose or inside a code fence. A broken object is not a call, so the
+    /// text can be shown instead.
+    /// </summary>
     internal static bool TryParseToolCall(string reply, out string tool, out string argsJson)
     {
         tool = "";
         argsJson = "{}";
-        var trimmed = reply.Trim();
-        // Tolerate ```json fences around the call.
-        if (trimmed.StartsWith("```"))
+        if (string.IsNullOrWhiteSpace(reply)) return false;
+        for (var i = 0; i < reply.Length; i++)
         {
-            trimmed = trimmed.Trim('`').Trim();
-            if (trimmed.StartsWith("json", StringComparison.OrdinalIgnoreCase)) trimmed = trimmed[4..].Trim();
+            if (reply[i] != '{') continue;
+            if (!TrySliceJson(reply, i, out var slice)) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(slice);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object) continue;
+                if (!doc.RootElement.TryGetProperty("tool", out var t) || t.ValueKind != JsonValueKind.String) continue;
+                var name = t.GetString() ?? "";
+                if (name.Length == 0) continue;
+                tool = name;
+                argsJson = doc.RootElement.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object ? a.GetRawText() : "{}";
+                return true;
+            }
+            catch (JsonException) { /* a later object may be the call */ }
+            i += Math.Max(0, slice.Length - 1);
         }
-        if (!trimmed.StartsWith('{')) return false;
+        return false;
+    }
+
+    internal static bool HoldsToolCall(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        var trimmed = text.TrimStart();
+        if (trimmed.StartsWith('{') || trimmed.StartsWith("```")) return true;
+        var brace = text.IndexOf('{');
+        return brace >= 0 && text.IndexOf("\"tool\"", brace, StringComparison.Ordinal) >= 0;
+    }
+
+    private static bool TrySliceJson(string text, int start, out string json)
+    {
+        var depth = 0;
+        var inString = false;
+        var escape = false;
+        for (var i = start; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (inString)
+            {
+                if (escape) escape = false;
+                else if (c == '\\') escape = true;
+                else if (c == '"') inString = false;
+                continue;
+            }
+            if (c == '"') { inString = true; continue; }
+            if (c == '{') depth++;
+            else if (c == '}')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    json = text[start..(i + 1)];
+                    return true;
+                }
+            }
+        }
+        json = "";
+        return false;
+    }
+
+    private async Task<OllamaCompletion> CompleteAsync(List<ChatMessage> messages, int? maxTokens, Action<string>? onDelta, CancellationToken ct)
+    {
+        if (_nativeTools == false)
+            return await _ollama.CompleteAsync(Settings.OllamaUrl, Settings.Model, messages, maxTokens, onDelta, nativeTools: false, ct);
         try
         {
-            using var doc = JsonDocument.Parse(trimmed);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object) return false;
-            if (!doc.RootElement.TryGetProperty("tool", out var t) || t.ValueKind != JsonValueKind.String) return false;
-            tool = t.GetString() ?? "";
-            argsJson = doc.RootElement.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object ? a.GetRawText() : "{}";
-            return tool.Length > 0;
+            var completion = await _ollama.CompleteAsync(Settings.OllamaUrl, Settings.Model, messages, maxTokens, onDelta, nativeTools: true, ct);
+            _nativeTools = true;
+            return completion;
         }
-        catch (JsonException) { return false; }
+        catch (HttpRequestException ex) when (OllamaChatClient.ModelRejectsTools(ex.Message))
+        {
+            _nativeTools = false;
+            Log.Information("Ollama model {Model} does not support native tools; using inline JSON tool calls", Settings.Model);
+            return await _ollama.CompleteAsync(Settings.OllamaUrl, Settings.Model, messages, maxTokens, onDelta, nativeTools: false, ct);
+        }
     }
 
     /// <summary>Build the JSON line sent to the tool bridge (properly escaped).</summary>

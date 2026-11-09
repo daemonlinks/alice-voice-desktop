@@ -38,6 +38,22 @@ public class OllamaRequestTests
     }
 
     [Fact]
+    public async Task NativeToolRequestOmitsKeepAliveAndSendsTheToolSchemas()
+    {
+        var handler = new CaptureHandler("""
+            {"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"honcho_search","arguments":{"query":"name"}}}]},"done":true}
+            """);
+        using var client = new OllamaChatClient(new HttpClient(handler));
+        var completion = await client.CompleteAsync("http://localhost:11434", "dolphin-llama3:8b",
+            [new ChatMessage("user", "hello")], null, null, nativeTools: true, CancellationToken.None);
+        using var doc = JsonDocument.Parse(handler.Body);
+        Assert.False(doc.RootElement.TryGetProperty("keep_alive", out _));
+        Assert.Equal("honcho_search", doc.RootElement.GetProperty("tools")[0].GetProperty("function").GetProperty("name").GetString());
+        Assert.Equal("honcho_search", completion.ToolCalls[0].Name);
+        Assert.Contains("name", completion.ToolCalls[0].ArgumentsJson);
+    }
+
+    [Fact]
     public async Task AnUnfinishedStreamIsAnErrorRatherThanABlankSuccess()
     {
         var handler = new CaptureHandler("{\"message\":{\"content\":\"partial\"}}\n");

@@ -1,3 +1,6 @@
+using System.Net;
+using System.Text;
+using System.Text.Json;
 using AliceVoice.Core.Chat;
 using AliceVoice.Core.Config;
 using AliceVoice.Core.Voice;
@@ -99,6 +102,30 @@ public class ToolCallTests
         Assert.Equal("search", tool);
     }
 
+    [Fact]
+    public void ParsesTheInlineNameQuestion()
+    {
+        const string reply = """
+            To access Master's memory about their name, I will use the honcho_search tool with the query "Master's name".
+
+            {"tool": "honcho_search", "args": {"query": "Master's name"}}
+            """;
+        Assert.True(AliceLocalBackend.TryParseToolCall(reply, out var tool, out var args));
+        Assert.Equal("honcho_search", tool);
+        Assert.Contains("Master's name", args);
+        Assert.False(AliceLocalBackend.IsKnownTool("not_a_tool"));
+        Assert.True(AliceLocalBackend.TryParseToolCall("{\"tool\":\"not_a_tool\",\"args\":{}}", out var unknown, out _));
+        Assert.Equal("not_a_tool", unknown);
+        Assert.Contains("unknown tool", AliceLocalBackend.UnknownToolResult(unknown));
+    }
+
+    [Fact]
+    public void MalformedToolJsonIsNotACall()
+    {
+        const string reply = "I will search {\"tool\": \"honcho_search\", \"args\": {";
+        Assert.False(AliceLocalBackend.TryParseToolCall(reply, out _, out _));
+    }
+
     [Theory]
     [InlineData("Hello Master, how are you?")]
     [InlineData("{\"not\":\"a tool\"}")]
@@ -115,6 +142,138 @@ public class ToolCallTests
         using var doc = System.Text.Json.JsonDocument.Parse(json);
         Assert.Equal("honcho_save", doc.RootElement.GetProperty("tool").GetString());
         Assert.Equal("she said \"hi\"\nthen left", doc.RootElement.GetProperty("args").GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task InlineToolCallIsRunAndTheJsonIsNotTheReply()
+    {
+        const string asked = """
+            To access Master's memory about their name, I will use the honcho_search tool with the query "Master's name".
+
+            {"tool": "honcho_search", "args": {"query": "Master's name"}}
+            """;
+        var calls = new List<string>();
+        var shown = new List<string>();
+        var backend = Backend(new ScriptedOllama(body =>
+        {
+            if (body.Contains("\"tools\"", StringComparison.Ordinal))
+                return Error("dolphin-llama3:8b does not support tools");
+            if (calls.Count == 0)
+                return Content(asked);
+            return Content("Your name is Alex.");
+        }));
+        backend.RunTool = (tool, args, _) =>
+        {
+            calls.Add(tool + " " + args);
+            return Task.FromResult("{\"notes\":[\"Master is called Alex\"]}");
+        };
+        backend.EventReceived += e =>
+        {
+            if (e.Type is "reply_text" or "reply_partial") shown.Add(e.Type + ":" + e.Text);
+        };
+
+        var reply = await backend.AskAsync("What is my name?");
+
+        Assert.Equal("Your name is Alex.", reply);
+        Assert.Contains(calls, c => c.Contains("honcho_search") && c.Contains("Master's name"));
+        Assert.DoesNotContain(shown, line => line.Contains("\"tool\""));
+        Assert.Contains(shown, line => line.Contains("Your name is Alex."));
+    }
+
+    [Fact]
+    public async Task NativeToolCallIsRunWhenTheModelSupportsIt()
+    {
+        var calls = new List<string>();
+        var backend = Backend(new ScriptedOllama(body =>
+        {
+            if (calls.Count > 0) return Content("Your name is Alex.");
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("""
+                    {"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"honcho_search","arguments":{"query":"Master's name"}}}]},"done":false}
+                    {"message":{"role":"assistant","content":""},"done":true}
+                    """, System.Text.Encoding.UTF8, "application/x-ndjson")
+            };
+        }));
+        backend.RunTool = (tool, args, _) =>
+        {
+            calls.Add(tool + " " + args);
+            return Task.FromResult("{}");
+        };
+        var shown = new List<string>();
+        backend.EventReceived += e => { if (e.Type is "reply_text" or "reply_partial") shown.Add(e.Text ?? ""); };
+
+        var reply = await backend.AskAsync("What is my name?");
+
+        Assert.Equal("Your name is Alex.", reply);
+        Assert.Contains(calls, c => c.Contains("honcho_search") && c.Contains("Master's name"));
+        Assert.DoesNotContain(shown, text => text.Contains("\"tool\"") || text.Contains("tool_calls"));
+    }
+
+    [Fact]
+    public async Task UnknownToolDoesNotRunAndMalformedJsonIsShown()
+    {
+        var ran = false;
+        var backend = Backend(new ScriptedOllama(_ => Content("I will search {\"tool\": \"honcho_search\", \"args\": {")));
+        backend.RunTool = (_, _, _) => { ran = true; return Task.FromResult("{}"); };
+        var reply = await backend.AskAsync("hi");
+        Assert.False(ran);
+        Assert.Contains("honcho_search", reply);
+        Assert.Contains("{", reply);
+    }
+
+    [Fact]
+    public async Task UnknownToolNameIsReturnedToTheModelWithoutRunning()
+    {
+        var ran = false;
+        var requests = 0;
+        var backend = Backend(new ScriptedOllama(body =>
+        {
+            requests++;
+            if (body.Contains("\"tools\"", StringComparison.Ordinal))
+                return Error("dolphin-llama3 does not support tools");
+            if (!body.Contains("unknown tool", StringComparison.Ordinal))
+                return Content("{\"tool\": \"make_coffee\", \"args\": {}}");
+            return Content("I can't make coffee.");
+        }));
+        backend.RunTool = (_, _, _) => { ran = true; return Task.FromResult("ran"); };
+        var shown = new List<string>();
+        backend.EventReceived += e => { if (e.Type is "reply_text" or "reply_partial") shown.Add(e.Text ?? ""); };
+
+        var reply = await backend.AskAsync("coffee");
+
+        Assert.False(ran);
+        Assert.Equal("I can't make coffee.", reply);
+        Assert.True(requests >= 3);
+        Assert.DoesNotContain(shown, text => text.Contains("make_coffee"));
+    }
+
+    private static AliceLocalBackend Backend(HttpMessageHandler handler)
+    {
+        var http = new HttpClient(handler) { BaseAddress = new Uri("http://ollama.test/") };
+        return new AliceLocalBackend(new AliceVoiceOptions { OllamaUrl = "http://ollama.test" }, new OllamaChatClient(http));
+    }
+
+    private static HttpResponseMessage Error(string message)
+        => new(HttpStatusCode.BadRequest) { Content = new StringContent(message, Encoding.UTF8, "text/plain") };
+
+    private static HttpResponseMessage Content(string text)
+    {
+        var open = JsonSerializer.Serialize(new { message = new { role = "assistant", content = text }, done = false });
+        var close = JsonSerializer.Serialize(new { message = new { role = "assistant", content = "" }, done = true });
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(open + "\n" + close + "\n", Encoding.UTF8, "application/x-ndjson")
+        };
+    }
+
+    private sealed class ScriptedOllama(Func<string, HttpResponseMessage> next) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var body = request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken);
+            return next(body);
+        }
     }
 
     [Fact]
