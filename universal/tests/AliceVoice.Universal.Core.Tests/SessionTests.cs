@@ -208,6 +208,83 @@ public class VoiceSessionTests
     }
 
     [Fact]
+    public async Task SuccessfulReconnectClearsTheError()
+    {
+        var fx = await Fixture.Start();
+        fx.Manager.Fail = true;
+        await fx.Session.ConnectAsync(force: true);
+        Assert.Contains("Connect failed", fx.Session.Error);
+        fx.Manager.Fail = false;
+        await fx.Session.ConnectAsync(force: true);
+        Assert.Null(fx.Session.Error);
+        Assert.True(fx.Session.Connected);
+        Assert.Equal("Alice LOCAL", fx.Session.StatusText);
+    }
+
+    [Fact]
+    public async Task FailedAskKeepsTheQuestionWhenTheSharedTranscriptUpdates()
+    {
+        var fx = await Fixture.Start(shared: true);
+        fx.Manager.AskException = new TimeoutException("Ollama did not finish within 3 minutes.");
+        await fx.Session.SendTextAsync("where did I leave the question");
+        Assert.Contains("3 minutes", fx.Session.Error);
+        fx.Conversation!.Append("from the phone", "phone reply", "phone", DateTimeOffset.UtcNow);
+        Assert.Contains(fx.Session.Transcript, t => t.Kind == TranscriptKind.User && t.Text.Contains("where did I leave the question"));
+        Assert.Contains(fx.Session.Transcript, t => t.Text == "phone reply");
+    }
+
+    [Fact]
+    public async Task DisconnectStopsTheTurnAndKeepsTheQuestion()
+    {
+        var fx = await Fixture.Start(shared: true);
+        fx.Manager.AskEntered = new TaskCompletionSource<bool>();
+        fx.Manager.ReleaseAsk = new TaskCompletionSource<bool>();
+        var send = fx.Session.SendTextAsync("do not lose this");
+        Assert.True(await fx.Manager.AskEntered.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        fx.Session.Disconnect();
+        await send;
+        Assert.False(fx.Session.Connected);
+        Assert.Equal("Ready", fx.Session.StatusText);
+        Assert.Contains(fx.Session.Transcript, t => t.Kind == TranscriptKind.User && t.Text.Contains("do not lose this"));
+    }
+
+    [Fact]
+    public async Task ANewQuestionCancelsThePreviousOneWithoutDroppingIt()
+    {
+        var fx = await Fixture.Start();
+        fx.Manager.AskEntered = new TaskCompletionSource<bool>();
+        var held = new TaskCompletionSource<bool>();
+        fx.Manager.ReleaseAsk = held;
+        var first = fx.Session.SendTextAsync("first question");
+        Assert.True(await fx.Manager.AskEntered.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        fx.Manager.ReleaseAsk = CompletedSource();
+        await fx.Session.SendTextAsync("second question");
+        await first;
+        Assert.Contains(fx.Session.Transcript, t => t.Text.Contains("first question"));
+        Assert.Contains(fx.Session.Transcript, t => t.Text.Contains("second question"));
+        Assert.Contains(fx.Session.Transcript, t => t.Kind == TranscriptKind.Alice && t.Text == "Hello back");
+        Assert.Equal("Replied from Alice LOCAL", fx.Session.StatusText);
+    }
+
+    [Fact]
+    public async Task ToolActivityShowsTheNameAndNotThePayload()
+    {
+        var fx = await Fixture.Start();
+        fx.Manager.Raise(new BackendEvent("tool_call", "honcho_search"));
+        Assert.Equal("using honcho_search", fx.Session.ActivityDetail);
+        fx.Manager.Raise(new BackendEvent("tool_call", "{\"query\":\"secret fact\"}"));
+        Assert.Equal("using a tool", fx.Session.ActivityDetail);
+        Assert.DoesNotContain("secret", fx.Session.ActivityDetail);
+    }
+
+    private static TaskCompletionSource<bool> CompletedSource()
+    {
+        var source = new TaskCompletionSource<bool>();
+        source.SetResult(true);
+        return source;
+    }
+
+    [Fact]
     public void LatencyBookKeepsTwentyTurns()
     {
         var book = new LatencyBook();
@@ -233,8 +310,9 @@ public class VoiceSessionTests
         public required FakeUpdater Updater { get; init; }
         public required FakeWake Wake { get; init; }
         public required MutableClock Clock { get; init; }
+        public SharedTranscript? Conversation { get; init; }
 
-        public static async Task<Fixture> Start(bool wake = true, PlatformHostKind kind = PlatformHostKind.Windows)
+        public static async Task<Fixture> Start(bool wake = true, PlatformHostKind kind = PlatformHostKind.Windows, bool shared = false)
         {
             var clock = new MutableClock { Utc = new DateTime(2026, 11, 4, 12, 0, 0, DateTimeKind.Utc) };
             var manager = new FakeManager();
@@ -248,12 +326,13 @@ public class VoiceSessionTests
             };
             var wakeCtrl = new FakeWake { IsAvailable = wake, UnavailableReason = wake ? "" : "No wake-word model installed." };
             var host = new UniversalHost(kind, new AliceVoiceOptions(), Path.GetTempPath(), Path.Combine(Path.GetTempPath(), "no-such-assignments.json"), Path.GetTempPath(), null, null, null);
+            var conversation = shared ? new SharedTranscript() : null;
             var session = new VoiceSession(host, manager, chat, speech, new FakeMic(), updater, new FakeSoul(), new StaticWakeSource(wakeCtrl),
-                new VoiceAssignmentStore(host.AssignmentPath), hub: null, clock: () => clock.Utc, localClock: () => clock.Utc);
+                new VoiceAssignmentStore(host.AssignmentPath), conversation, hub: null, clock: () => clock.Utc, localClock: () => clock.Utc);
             session.SetMood("playful");
             session.SetProfile("quick");
             await session.InitializeAsync();
-            return new Fixture { Session = session, Manager = manager, Chat = chat, Speech = speech, Updater = updater, Wake = wakeCtrl, Clock = clock };
+            return new Fixture { Session = session, Manager = manager, Chat = chat, Speech = speech, Updater = updater, Wake = wakeCtrl, Clock = clock, Conversation = conversation };
         }
     }
 
@@ -303,6 +382,8 @@ public class VoiceSessionTests
         public List<string> Commands { get; } = new();
         public bool Fail;
         public Exception? AskException;
+        public TaskCompletionSource<bool>? AskEntered;
+        public TaskCompletionSource<bool>? ReleaseAsk;
         public VoiceBackendKind CurrentKind => VoiceBackendKind.AliceLocal;
         public IVoiceBackend Current => Local;
         public ISttClient Stt => SttClient;
@@ -319,14 +400,18 @@ public class VoiceSessionTests
             return Task.CompletedTask;
         }
         public Task<SttResult> TranscribeAsync(short[] pcm16k, CancellationToken ct = default) => SttClient.TranscribeAsync(pcm16k, ct);
-        public Task<string> AskAsync(string prompt, AskOptions? options = null, CancellationToken ct = default)
+        public async Task<string> AskAsync(string prompt, AskOptions? options = null, CancellationToken ct = default)
         {
             LastPrompt = prompt;
             LastOptions = options;
-            if (AskException is not null) return Task.FromException<string>(AskException);
+            AskEntered?.TrySetResult(true);
+            if (ReleaseAsk is not null) await ReleaseAsk.Task.WaitAsync(ct);
+            if (AskException is not null) throw AskException;
             EventReceived?.Invoke(new BackendEvent("reply_partial", "He"));
-            return Task.FromResult(Reply);
+            return Reply;
         }
+
+        public void Raise(BackendEvent evt) => EventReceived?.Invoke(evt);
         public Task SendCommandAsync(string type, object? payload = null, CancellationToken ct = default)
         {
             Commands.Add(type);

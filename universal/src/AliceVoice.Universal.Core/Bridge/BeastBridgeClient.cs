@@ -88,6 +88,18 @@ public sealed class BeastBridgeClient : IDisposable
 
     public async Task<string> AskLocalAsync(string prompt, AskOptions? options, Action<BackendEvent>? onEvent, CancellationToken ct = default)
     {
+        try
+        {
+            return await AskLocalCoreAsync(prompt, options, onEvent, ct);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException("The Beast bridge did not answer in time.");
+        }
+    }
+
+    private async Task<string> AskLocalCoreAsync(string prompt, AskOptions? options, Action<BackendEvent>? onEvent, CancellationToken ct)
+    {
         var payload = new AskRequest(prompt, options?.MaxTokens, options?.StyleHint);
         using var req = new HttpRequestMessage(HttpMethod.Post, _urls.LocalAsk) { Content = JsonContent.Create(payload, options: Json) };
         using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
@@ -109,7 +121,9 @@ public sealed class BeastBridgeClient : IDisposable
         if (final is null && error is not null) throw new InvalidOperationException(error);
         if (final is null && !resp.IsSuccessStatusCode)
             throw new InvalidOperationException($"Alice LOCAL bridge failed ({(int)resp.StatusCode})");
-        return final ?? "";
+        if (final is null)
+            throw new InvalidOperationException("Alice LOCAL bridge returned no reply.");
+        return final;
     }
 
     public async Task<bool> RememberAsync(string content, CancellationToken ct = default)

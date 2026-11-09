@@ -239,6 +239,7 @@ public sealed class VoiceSession : IAsyncDisposable
                 if (force && _voice.CurrentKind == VoiceBackendKind.AliceLocal) await _voice.ReconnectAsync(ct);
                 else await _voice.SwitchToAsync(VoiceBackendKind.AliceLocal, ct: ct);
                 SetConnected(true);
+                Error = null;
                 StatusText = "Alice LOCAL";
                 SetActivity("Ready", "Alice LOCAL · local (Ollama)");
             }
@@ -246,6 +247,7 @@ public sealed class VoiceSession : IAsyncDisposable
             {
                 var ok = await _chat.IsReachableAsync(member, ct);
                 SetConnected(ok);
+                if (ok) Error = null;
                 StatusText = ok
                     ? $"{member.DisplayName} reachable"
                     : $"{member.DisplayName} not reachable ({(_chat.HasApiKey ? "not served / key rejected" : "no API_SERVER_KEY")})";
@@ -267,6 +269,7 @@ public sealed class VoiceSession : IAsyncDisposable
 
     public void Disconnect()
     {
+        CancelTurn();
         SetConnected(false);
         StatusText = "Ready";
         RefreshStatus();
@@ -634,12 +637,20 @@ public sealed class VoiceSession : IAsyncDisposable
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            KeepAskedText();
             OperationTrail.Leave("turn.cancel", target);
             AddLog("Turn cancelled");
+            if (myTurn == _turnId)
+            {
+                StatusText = "Stopped";
+                SetActivity("Ready");
+                Touch();
+            }
             return;
         }
         catch (Exception ex)
         {
+            KeepAskedText();
             if (myTurn == _turnId) { _streamTurnId = 0; _streamEntry = null; }
             LlmLamp = StageLamp.Red;
             // Record the ask failure before any paint. The 18:15 crash threw
@@ -1041,11 +1052,27 @@ public sealed class VoiceSession : IAsyncDisposable
         var cts = _turnCts;
         _turnCts = null;
         if (cts is null) return;
+        _turnId++;
         try { cts.Cancel(); } catch { }
         try { _stopSpeech?.Invoke(); } catch { }
         cts.Dispose();
         _streamTurnId = 0;
         _streamEntry = null;
+        KeepAskedText();
+    }
+
+    /// <summary>
+    /// A cancelled or failed ask is not part of the shared transcript.
+    /// Leave the question on screen; the next snapshot only replaces lines still marked in flight.
+    /// </summary>
+    private void KeepAskedText()
+    {
+        lock (_gate)
+        {
+            foreach (var entry in _transcript)
+                if (entry.PendingShared && entry.Kind == TranscriptKind.User)
+                    entry.PendingShared = false;
+        }
     }
 
     private void ApplySensitivity(double value, bool writeEngine)

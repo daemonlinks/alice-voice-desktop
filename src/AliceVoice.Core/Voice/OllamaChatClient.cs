@@ -13,6 +13,13 @@ public sealed class OllamaChatClient : IDisposable
 {
     private readonly HttpClient _http;
 
+    /// <summary>
+    /// How long one chat may run before it is reported as a timeout.
+    /// Ollama's server <c>keep_alive</c> is intentionally not sent, so a
+    /// service-wide value (such as one hour) is left alone.
+    /// </summary>
+    public TimeSpan ReplyTimeout { get; set; } = TimeSpan.FromMinutes(3);
+
     public OllamaChatClient(HttpClient? http = null)
     {
         _http = http ?? new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
@@ -45,33 +52,46 @@ public sealed class OllamaChatClient : IDisposable
         {
             Content = JsonContent.Create(body)
         };
-        // Idle/overall guard: a stuck model must not hang the turn forever.
+        // A stuck model must not hang the turn. This does not change how long
+        // Ollama keeps the model loaded; that field is omitted on purpose.
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromMinutes(3));
-
-        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-        if (!resp.IsSuccessStatusCode)
+        cts.CancelAfter(ReplyTimeout);
+        try
         {
-            var err = await resp.Content.ReadAsStringAsync(cts.Token);
-            throw new HttpRequestException($"Ollama chat failed ({(int)resp.StatusCode}): {Truncate(err, 200)}");
-        }
-
-        var sb = new StringBuilder();
-        await using var stream = await resp.Content.ReadAsStreamAsync(cts.Token);
-        using var reader = new StreamReader(stream, Encoding.UTF8);
-        while (await reader.ReadLineAsync(cts.Token) is { } line)
-        {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            var delta = ParseChunk(line, out var done, out var error);
-            if (error is not null) throw new HttpRequestException($"Ollama error: {Truncate(error, 200)}");
-            if (!string.IsNullOrEmpty(delta))
+            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            if (!resp.IsSuccessStatusCode)
             {
-                sb.Append(delta);
-                onDelta?.Invoke(delta);
+                var err = await resp.Content.ReadAsStringAsync(cts.Token);
+                throw new HttpRequestException($"Ollama chat failed ({(int)resp.StatusCode}): {Truncate(err, 200)}");
             }
-            if (done) break;
+
+            var sb = new StringBuilder();
+            var completed = false;
+            await using var stream = await resp.Content.ReadAsStreamAsync(cts.Token);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            while (await reader.ReadLineAsync(cts.Token) is { } line)
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                var delta = ParseChunk(line, out var done, out var error);
+                if (error is not null) throw new HttpRequestException($"Ollama error: {Truncate(error, 200)}");
+                if (!string.IsNullOrEmpty(delta))
+                {
+                    sb.Append(delta);
+                    onDelta?.Invoke(delta);
+                }
+                if (done) { completed = true; break; }
+            }
+            if (!completed)
+                throw new HttpRequestException("Ollama chat ended before a completed reply.");
+            return sb.ToString();
         }
-        return sb.ToString();
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            var limit = ReplyTimeout.TotalMinutes >= 1
+                ? $"{ReplyTimeout.TotalMinutes:0} minutes"
+                : $"{ReplyTimeout.TotalSeconds:0} seconds";
+            throw new TimeoutException($"Ollama did not finish within {limit}.");
+        }
     }
 
     /// <summary>Parse one NDJSON line from /api/chat.</summary>
