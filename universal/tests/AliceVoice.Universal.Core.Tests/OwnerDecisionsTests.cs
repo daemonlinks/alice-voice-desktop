@@ -69,12 +69,14 @@ public class BridgeBindPolicyTests
     }
 
     [Fact]
-    public void AndroidDefaultsToTheBeastTailscaleName()
+    public void AndroidDefaultsToTheBeastTailscaleAddress()
     {
         var host = UniversalHost.Prepare(PlatformHostKind.Android, Layout(), _ => null);
-        Assert.Equal(BridgeBindPolicy.DefaultBeastHost, host.Remote!.Host);
-        Assert.Equal("http://ahc-the-beast:11434", host.Options.OllamaUrl);
-        Assert.Equal("http://ahc-the-beast:7851", host.Options.AllTalkUrl);
+        Assert.Equal(BridgeClientDirectory.TailscaleHost, host.Remote!.Host);
+        Assert.Equal(8765, host.Remote.BridgePort);
+        Assert.False(host.BridgeEnabled);
+        Assert.Equal("http://100.64.237.3:11434", host.Options.OllamaUrl);
+        Assert.Equal("http://100.64.237.3:7851", host.Options.AllTalkUrl);
     }
 
     private static HostLayout Layout() => new(null, Path.GetTempPath(), Path.Combine(Path.GetTempPath(), "voices.json"), Path.GetTempPath());

@@ -132,6 +132,7 @@ public partial class MainPage : ContentPage
             ProfHint.Text = _session.ProfileHint;
             TuningLast.Text = _session.Latency.LastTurnLine;
             SettingsModel.Text = _session.SettingsLine;
+            BridgeEditor.IsVisible = _session.ShowBridgeEditor;
             FooterAuth.Text = _session.FooterAuth;
             LlmMode.Text = _session.LlmMode;
             WsDisplay.Text = _session.WsDisplay;
@@ -347,7 +348,20 @@ public partial class MainPage : ContentPage
     private void OnRandBg(object? sender, EventArgs e) => _session.RandomBackground();
     private void OnToggleLog(object? sender, EventArgs e) { LogPanel.IsVisible = !LogPanel.IsVisible; LogToggle.Text = (LogPanel.IsVisible ? "▾" : "▸") + "  Event Log"; FillLog(); }
     private void OnToggleHelp(object? sender, EventArgs e) => HelpPanel.IsVisible = !HelpPanel.IsVisible;
-    private void OnToggleSettings(object? sender, EventArgs e) => SettingsPanel.IsVisible = !SettingsPanel.IsVisible;
+    private void OnToggleSettings(object? sender, EventArgs e)
+    {
+        SettingsPanel.IsVisible = !SettingsPanel.IsVisible;
+        if (!SettingsPanel.IsVisible) return;
+        BeastHostEntry.Text = _session.BridgeHost;
+        BeastPortEntry.Text = _session.BridgePort;
+        BridgeSaveStatus.Text = _session.BridgeStatus;
+    }
+
+    private void OnSaveBridge(object? sender, EventArgs e)
+    {
+        var error = _session.TrySaveBridge(BeastHostEntry.Text ?? "", BeastPortEntry.Text ?? "");
+        BridgeSaveStatus.Text = error ?? _session.BridgeStatus;
+    }
     private void OnToggleMetrics(object? sender, EventArgs e) => MetricsPanel.IsVisible = !MetricsPanel.IsVisible;
     private void OnToggleTuning(object? sender, EventArgs e) => TuningPanel.IsVisible = !TuningPanel.IsVisible;
 

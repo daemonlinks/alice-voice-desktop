@@ -86,9 +86,8 @@ user who runs the app (this is the usual Windows step, not a Tailscale step):
 netsh http add urlacl url=http://100.x.y.z:8765/ user=$env:USERNAME
 ```
 
-The phone's default `ALICEVOICE_BEAST_HOST` is the Tailscale MagicDNS name
-`ahc-the-beast`. Override it with the Beast's `100.x` address if MagicDNS is
-off. The phone does not copy the `Mirrored` scene folder or the PC's
+The phone dials `100.64.237.3` unless Settings (or `ALICEVOICE_BEAST_HOST`)
+names another host. The phone does not copy the `Mirrored` scene folder or the PC's
 voice-assignment file. AllTalk and Piper still run on the Beast. Android's own
 speech engine is a separate provider (`AndroidSpeech` = 3 in
 `voice-assignments.json`) and can be assigned on the phone. Windows ignores
@@ -274,8 +273,13 @@ A Debug APK is written under
 Install it with `adb install` (the `-Signed.apk` is the one the SDK signs
 with the debug key).
 
-On the phone, `ALICEVOICE_BEAST_HOST` defaults to `ahc-the-beast`. Set it to
-the Beast's Tailscale IPv4 (`100.x.y.z`) when MagicDNS is not available.
+On the phone, Connect dials the Beast's Tailscale address `100.64.237.3`
+port 8765 first. The short name `ahc-the-beast` is only a fallback, because
+home DNS can turn it into `192.168.1.60`, where the bridge is not listening.
+Settings → Beast bridge shows the address and saves a change in the app's
+own `appsettings.json`, which updates do not wipe. A Windows PC that is not
+the Beast dials the same address and does not listen. The Beast keeps using
+local services while `BridgeBind` is set.
 `ALICEVOICE_BRIDGE_PORT` defaults to 8765. `ALICEVOICE_*` environment variables
 win over `appsettings.json` (see `appsettings.example.json`).
 

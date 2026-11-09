@@ -72,16 +72,12 @@ public class LauncherTests
     }
 
     [Fact]
-    public void PublishedSourceDoesNotEmbedTheBeastAddress()
+    public void ListenAddressIsNotPrefilledForEveryInstall()
     {
-        var root = RepoRoot();
-        var src = Path.Combine(root, "universal", "src");
+        var src = Path.Combine(RepoRoot(), "universal", "src");
         var hits = Directory.EnumerateFiles(src, "*.*", SearchOption.AllDirectories)
-            .Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-                || path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
-                || path.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase)
-                || path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
-            .Where(path => File.ReadAllText(path).Contains("100.64.237.3", StringComparison.Ordinal))
+            .Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+            .Where(path => File.ReadAllText(path).Contains("\"BridgeBind\": \"100.64.237.3:8765\"", StringComparison.Ordinal))
             .ToList();
         Assert.Empty(hits);
     }

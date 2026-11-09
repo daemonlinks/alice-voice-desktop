@@ -109,6 +109,16 @@
                 </VerticalStackLayout>
                 <Button Text="▸  Settings" Style="{StaticResource Chip}" HorizontalOptions="Start" Clicked="OnToggleSettings" />
                 <VerticalStackLayout x:Name="SettingsPanel" IsVisible="False" Spacing="4">
+                    <VerticalStackLayout x:Name="BridgeEditor" IsVisible="False" Spacing="4">
+                        <Label Text="Beast bridge" />
+                        <Label Text="Tailscale address this device dials. It does not open a bridge here." Style="{StaticResource Dim}" LineBreakMode="WordWrap" />
+                        <HorizontalStackLayout Spacing="8">
+                            <Entry x:Name="BeastHostEntry" Placeholder="100.64.237.3" HorizontalOptions="FillAndExpand" Style="{StaticResource Field}" />
+                            <Entry x:Name="BeastPortEntry" Placeholder="8765" WidthRequest="80" Keyboard="Numeric" Style="{StaticResource Field}" />
+                            <Button Text="Save" Style="{StaticResource Chip}" Clicked="OnSaveBridge" />
+                        </HorizontalStackLayout>
+                        <Label x:Name="BridgeSaveStatus" Style="{StaticResource Dim}" LineBreakMode="WordWrap" />
+                    </VerticalStackLayout>
                     <Label x:Name="SettingsModel" LineBreakMode="WordWrap" />
                     <Label Text="Key points, memory items and char limit are not wired — the agent owns context injection." Style="{StaticResource Dim}" LineBreakMode="WordWrap" />
                     <HorizontalStackLayout Spacing="8">

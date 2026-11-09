@@ -81,10 +81,12 @@ public sealed class VoiceSession : IAsyncDisposable
     private DateTime _errorUntil;
     private DateTime _nextConversationPoll;
     private Action? _stopSpeech;
+    private readonly BridgeClientSettings? _bridgeClient;
 
     public VoiceSession(UniversalHost host, IVoiceBackendManager voice, IFleetChat chat, IVoiceProviderManager providers,
         IPcmMicrophone mic, IAppUpdater updater, ISoulGateway soul, IWakeSource wakeSource, VoiceAssignmentStore assignments,
-        IAliceConversation? conversation = null, SoulReloadHub? hub = null, Func<DateTime>? clock = null, Func<DateTime>? localClock = null)
+        IAliceConversation? conversation = null, SoulReloadHub? hub = null, Func<DateTime>? clock = null, Func<DateTime>? localClock = null,
+        BridgeClientSettings? bridgeClient = null)
     {
         _host = host;
         _voice = voice;
@@ -97,6 +99,7 @@ public sealed class VoiceSession : IAsyncDisposable
         _assignments = assignments;
         _conversation = conversation;
         _hub = hub;
+        _bridgeClient = bridgeClient;
         if (_conversation is not null) _conversation.Changed += () => ApplySharedSnapshot();
         _clock = clock ?? (() => DateTime.UtcNow);
         _local = localClock ?? (() => DateTime.Now);
@@ -165,6 +168,22 @@ public sealed class VoiceSession : IAsyncDisposable
     public string VoiceLabel { get; private set; } = "—";
     public string ConnectionLabel { get; private set; } = "offline";
     public string SettingsLine { get; private set; } = "";
+    public bool ShowBridgeEditor => _bridgeClient is not null;
+    public string BridgeHost => _bridgeClient?.Host ?? "";
+    public string BridgePort => _bridgeClient is null ? "" : _bridgeClient.Port.ToString();
+    public string BridgeStatus { get; private set; } = "Clients dial this Tailscale address. This device does not listen.";
+
+    /// <summary>Persist a client dial address. Returns an error to show, or null when saved.</summary>
+    public string? TrySaveBridge(string host, string portText)
+    {
+        if (_bridgeClient is null) return "This device is the Beast and does not dial a bridge.";
+        if (string.IsNullOrWhiteSpace(host)) return "Host is empty.";
+        if (!int.TryParse(portText.Trim(), out var port) || port is < 1 or > 65535) return "Port must be 1–65535.";
+        _bridgeClient.Save(host.Trim(), port);
+        BridgeStatus = $"Saved {_bridgeClient.Host}:{_bridgeClient.Port}. Connect uses this address.";
+        Touch();
+        return null;
+    }
     public string FooterAuth { get; private set; } = "—";
     public string LlmMode { get; private set; } = "alice_local";
     public string WsDisplay { get; private set; } = "api·off";
@@ -234,6 +253,8 @@ public sealed class VoiceSession : IAsyncDisposable
         Touch();
         try
         {
+            if (IsAliceLocal && _bridgeClient is not null)
+                await _bridgeClient.EnsureReachableAsync(ct);
             if (IsAliceLocal)
             {
                 if (force && _voice.CurrentKind == VoiceBackendKind.AliceLocal) await _voice.ReconnectAsync(ct);

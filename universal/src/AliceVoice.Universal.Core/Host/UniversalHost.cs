@@ -13,7 +13,8 @@ public sealed record UniversalHost(
     string? BridgeBindHost,
     int? BridgeBindPort,
     string? BridgeBindRefusal = null,
-    bool AllowUnsafeBridgeBind = false)
+    bool AllowUnsafeBridgeBind = false,
+    string? SettingsFile = null)
 {
     public bool BridgeEnabled => BridgeBindHost is not null && BridgeBindPort is not null;
 
@@ -31,31 +32,9 @@ public sealed record UniversalHost(
         var options = AliceVoiceOptions.Load(layout.SettingsFile, env);
         var extra = ReadExtra(layout.SettingsFile);
 
-        var beast = First(env, "ALICEVOICE_BEAST_HOST", extra?.BeastHost);
-        if (kind == PlatformHostKind.Android && string.IsNullOrWhiteSpace(beast))
-            beast = BridgeBindPolicy.DefaultBeastHost;
         var bridgePortText = First(env, "ALICEVOICE_BRIDGE_PORT", extra?.BridgePort?.ToString());
         var bridgeBind = First(env, "ALICEVOICE_BRIDGE_BIND", extra?.BridgeBind);
         var allowUnsafe = BridgeBindPolicy.IsOverrideEnabled(First(env, BridgeBindPolicy.OverrideEnvironmentVariable, extra?.AllowUnsafeBridgeBind));
-
-        if (kind == PlatformHostKind.Android && !string.IsNullOrWhiteSpace(beast))
-            BeastServiceUrls.ApplyServiceDefaults(options, beast);
-
-        if (kind == PlatformHostKind.Android
-            && string.IsNullOrWhiteSpace(options.BackgroundsDir)
-            && string.IsNullOrWhiteSpace(env("ALICEVOICE_BACKGROUNDS"))
-            && !string.IsNullOrWhiteSpace(layout.BackgroundsDirectory))
-        {
-            options.BackgroundsDir = layout.BackgroundsDirectory;
-        }
-
-        BeastServiceUrls? remote = null;
-        if (!string.IsNullOrWhiteSpace(beast))
-        {
-            var port = BeastServiceUrls.DefaultBridgePort;
-            if (int.TryParse(bridgePortText, out var p) && p is > 0 and < 65536) port = p;
-            remote = new BeastServiceUrls(BeastServiceUrls.HostOnly(beast), port);
-        }
 
         string? bindHost = null;
         int? bindPort = null;
@@ -76,7 +55,34 @@ public sealed record UniversalHost(
             }
         }
 
-        return new UniversalHost(kind, options, layout.LogDirectory, layout.AssignmentPath, options.BackgroundsDir ?? layout.BackgroundsDirectory, remote, bindHost, bindPort, refusal, allowUnsafe);
+        var listening = bindHost is not null;
+        var beast = First(env, "ALICEVOICE_BEAST_HOST", extra?.BeastHost);
+        // Clients dial the Beast. The short name is not the default: on a LAN it
+        // resolves to a private address where the Tailscale-only bridge is closed.
+        var client = kind == PlatformHostKind.Android || (kind == PlatformHostKind.Windows && !listening);
+        if (client && string.IsNullOrWhiteSpace(beast))
+            beast = BridgeClientDirectory.TailscaleHost;
+
+        if (kind == PlatformHostKind.Android && !string.IsNullOrWhiteSpace(beast))
+            BeastServiceUrls.ApplyServiceDefaults(options, beast);
+
+        if (kind == PlatformHostKind.Android
+            && string.IsNullOrWhiteSpace(options.BackgroundsDir)
+            && string.IsNullOrWhiteSpace(env("ALICEVOICE_BACKGROUNDS"))
+            && !string.IsNullOrWhiteSpace(layout.BackgroundsDirectory))
+        {
+            options.BackgroundsDir = layout.BackgroundsDirectory;
+        }
+
+        BeastServiceUrls? remote = null;
+        if (!listening && !string.IsNullOrWhiteSpace(beast))
+        {
+            var port = BeastServiceUrls.DefaultBridgePort;
+            if (int.TryParse(bridgePortText, out var p) && p is > 0 and < 65536) port = p;
+            remote = new BeastServiceUrls(BeastServiceUrls.HostOnly(beast), port);
+        }
+
+        return new UniversalHost(kind, options, layout.LogDirectory, layout.AssignmentPath, options.BackgroundsDir ?? layout.BackgroundsDirectory, remote, bindHost, bindPort, refusal, allowUnsafe, layout.SettingsFile);
     }
 
     private static string? First(Func<string, string?> env, string name, string? fromFile)

@@ -267,6 +267,20 @@ public class VoiceSessionTests
     }
 
     [Fact]
+    public async Task ConnectNamesEveryBridgeHostItTried()
+    {
+        var endpoint = new BridgeEndpoint("ahc-the-beast", 8765);
+        var settings = new BridgeClientSettings(endpoint, null, new AliceVoiceOptions());
+        settings.Probe = (_, _, _) => Task.FromResult(new ProbeResult(false, "connection refused"));
+        var fx = await Fixture.Start(bridge: settings);
+        await fx.Session.ConnectAsync(force: true);
+        Assert.False(fx.Session.Connected);
+        Assert.Contains("Connect failed:", fx.Session.Error);
+        Assert.Contains("ahc-the-beast:8765 (connection refused)", fx.Session.Error);
+        Assert.Contains("100.64.237.3:8765 (connection refused)", fx.Session.Error);
+    }
+
+    [Fact]
     public async Task ToolActivityShowsTheNameAndNotThePayload()
     {
         var fx = await Fixture.Start();
@@ -312,7 +326,7 @@ public class VoiceSessionTests
         public required MutableClock Clock { get; init; }
         public SharedTranscript? Conversation { get; init; }
 
-        public static async Task<Fixture> Start(bool wake = true, PlatformHostKind kind = PlatformHostKind.Windows, bool shared = false)
+        public static async Task<Fixture> Start(bool wake = true, PlatformHostKind kind = PlatformHostKind.Windows, bool shared = false, BridgeClientSettings? bridge = null)
         {
             var clock = new MutableClock { Utc = new DateTime(2026, 11, 4, 12, 0, 0, DateTimeKind.Utc) };
             var manager = new FakeManager();
@@ -328,7 +342,7 @@ public class VoiceSessionTests
             var host = new UniversalHost(kind, new AliceVoiceOptions(), Path.GetTempPath(), Path.Combine(Path.GetTempPath(), "no-such-assignments.json"), Path.GetTempPath(), null, null, null);
             var conversation = shared ? new SharedTranscript() : null;
             var session = new VoiceSession(host, manager, chat, speech, new FakeMic(), updater, new FakeSoul(), new StaticWakeSource(wakeCtrl),
-                new VoiceAssignmentStore(host.AssignmentPath), conversation, hub: null, clock: () => clock.Utc, localClock: () => clock.Utc);
+                new VoiceAssignmentStore(host.AssignmentPath), conversation, hub: null, clock: () => clock.Utc, localClock: () => clock.Utc, bridgeClient: bridge);
             session.SetMood("playful");
             session.SetProfile("quick");
             await session.InitializeAsync();

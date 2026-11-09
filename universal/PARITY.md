@@ -139,7 +139,7 @@ Tools: `honcho_search · honcho_save · honcho_forget · search (Alice LOCAL)`.
 | Ollama | `http://localhost:11434` | `ALICEVOICE_OLLAMA_URL` | Unchanged | The bridge's Alice LOCAL uses the Beast's Ollama. If `ALICEVOICE_OLLAMA_URL` is set on the phone it is not what Alice LOCAL uses; the bridge uses the PC's options |
 | AllTalk | `http://127.0.0.1:7851` | `ALICEVOICE_ALLTALK_URL` | Unchanged | `http://<Beast>:7851` unless the phone sets the URL |
 | Honcho | `http://localhost:8001` | `HONCHO_BASE` / `.env` | Unchanged, via the Python script | Only on the Beast, via that script |
-| App U bridge | off | `ALICEVOICE_BRIDGE_BIND` must be a Tailscale address (100.64.0.0/10, Tailscale IPv6, MagicDNS name, or `*.ts.net`). `0.0.0.0`, public addresses, and `192.168.x` are refused unless `ALICEVOICE_BRIDGE_ALLOW_UNSAFE_BIND=1`. Phone default host is `ahc-the-beast`; port default **8765** | Listens only when the bind is accepted | Client. Cleartext HTTP inside Tailscale. Does not sync `Mirrored` or the PC voice file |
+| App U bridge | off | `ALICEVOICE_BRIDGE_BIND` must be a Tailscale address (100.64.0.0/10, Tailscale IPv6, MagicDNS name, or `*.ts.net`). `0.0.0.0`, public addresses, and `192.168.x` are refused unless `ALICEVOICE_BRIDGE_ALLOW_UNSAFE_BIND=1`. Clients dial `100.64.237.3` port **8765** first, then `ahc-the-beast` if that fails. They never set `BridgeBind` | Listens only when the bind is accepted. A Windows PC without a bind dials the Beast instead of listening | Client. Settings can change the dial address. Cleartext HTTP inside Tailscale. Does not sync `Mirrored` or the PC voice file |
 
 `BeastHost`, `BridgePort`, and `BridgeBind` may also sit in `appsettings.json`.
 They are not fields of `AliceVoiceOptions`, so the WinUI schema is unchanged.
