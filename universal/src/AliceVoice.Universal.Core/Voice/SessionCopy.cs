@@ -8,8 +8,9 @@ public static class SessionCopy
     public const string ContextSliderReason = "Not implemented yet — context injection is controlled by the agent.";
     public const string SoulFleetNotice = "The SOUL editor edits Alice LOCAL's own SOUL — select Alice LOCAL as the Agent first.";
     public const string SoulFleetStatus = "SOUL editor is only available on Alice LOCAL";
-    public const string HelpTriggers = "Remember that… · Remember I… · What do you know about me? · Forget that… · Remove that… · Delete that… · I don't like that anymore · Search for…";
-    public const string HelpTools = "honcho_search · honcho_save · honcho_forget · search (Alice LOCAL)";
+    public const string HelpTriggers = "Remember that… · Remember I… · What do you know about me? · Forget that… · Remove that… · Delete that… · I don't like that anymore · What time is it? · Search for…";
+    public const string HelpTools = "honcho_search · honcho_save · honcho_forget · time · search (Alice LOCAL)";
+    public const string HelpHoncho = "Honcho workspace hermes (Hermes). Peer alice_local observes AHC. Not a root workspace, and not the stray workspace id alice_local.";
     public const string StyleFleetTip = "Applies to Alice LOCAL only — fleet agents use their own Hermes profile settings.";
     public const string RememberFleetTip = "Remember saves to Alice LOCAL's memory — available when talking to Alice LOCAL.";
     public const string TalkTip = "Hold to talk — release to send. Tap to latch on, tap again to send.";

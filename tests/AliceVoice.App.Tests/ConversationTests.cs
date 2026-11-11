@@ -277,6 +277,139 @@ public class ToolCallTests
     }
 
     [Fact]
+    public void ToolInstructionsMatchTheWebContract()
+    {
+        var text = AliceLocalBackend.ToolDescriptions;
+        Assert.Contains("ONLY a JSON object", text);
+        Assert.Contains("Remember that", text);
+        Assert.Contains("Remember I", text);
+        Assert.Contains("What do you know about me?", text);
+        Assert.Contains("Forget that", text);
+        Assert.Contains("Remove that", text);
+        Assert.Contains("Delete that", text);
+        Assert.Contains("I don't like that anymore", text);
+        Assert.Contains("What time is it?", text);
+        Assert.Contains("Search for", text);
+        Assert.Contains("honcho_search", text);
+        Assert.Contains("honcho_save", text);
+        Assert.Contains("honcho_forget", text);
+        Assert.Contains("time: {}", text);
+        Assert.Contains("workspace hermes", text);
+        Assert.Contains("peer alice_local", text);
+        Assert.Contains("Do not honcho_save search results", text);
+        Assert.DoesNotContain("workspace alice_local", text);
+        Assert.True(AliceLocalBackend.IsKnownTool("time"));
+    }
+
+    [Theory]
+    [InlineData("Remember that I like tea", "honcho_save", "content", "I like tea")]
+    [InlineData("remember i take sugar", "honcho_save", "content", "I take sugar")]
+    [InlineData("What do you know about me?", "honcho_search", "query", "Master")]
+    [InlineData("What time is it?", "time", "", "")]
+    [InlineData("Search for rain tomorrow", "search", "query", "rain tomorrow")]
+    [InlineData("Please search for tea", "search", "query", "tea")]
+    [InlineData("Forget that I like tea", "honcho_forget", "content", "I like tea")]
+    [InlineData("Remove that the blue note", "honcho_forget", "content", "the blue note")]
+    [InlineData("Delete that cats", "honcho_forget", "query", "cats")]
+    public void TriggerPhrasesBecomeTheWebToolCall(string utterance, string tool, string field, string value)
+    {
+        Assert.True(AliceLocalToolTriggers.TryMatch(utterance, out var name, out var args));
+        Assert.Equal(tool, name);
+        using var doc = JsonDocument.Parse(args);
+        if (field.Length == 0)
+        {
+            Assert.Equal(JsonValueKind.Object, doc.RootElement.ValueKind);
+            Assert.Empty(doc.RootElement.EnumerateObject());
+            return;
+        }
+        Assert.Equal(value, doc.RootElement.GetProperty(field).GetString());
+    }
+
+    [Theory]
+    [InlineData("I don't like that anymore")]
+    [InlineData("What is my name?")]
+    [InlineData("I remember that song")]
+    [InlineData("Search for")]
+    [InlineData("Hello Master")]
+    public void ContextPhrasesAreLeftForTheModel(string utterance)
+        => Assert.False(AliceLocalToolTriggers.TryMatch(utterance, out _, out _));
+
+    [Fact]
+    public void RememberButtonPrefixesAboutMaster()
+    {
+        Assert.Equal("About Master: likes tea", AliceLocalBackend.RememberContent("  likes tea "));
+        Assert.Equal("About Master: likes tea", AliceLocalBackend.RememberContent("About Master: likes tea"));
+        Assert.Equal("", AliceLocalBackend.RememberContent("   "));
+    }
+
+    [Fact]
+    public async Task RememberButtonSavesToTheLocalPeer()
+    {
+        var backend = Backend(new ScriptedOllama(_ => Content("unused")));
+        string? saved = null;
+        backend.RunTool = (tool, args, _) =>
+        {
+            saved = tool + " " + args;
+            return Task.FromResult("{\"saved\":true}");
+        };
+        Assert.True(await backend.RememberAsync("likes tea"));
+        Assert.Contains("honcho_save", saved);
+        Assert.Contains("About Master: likes tea", saved);
+    }
+
+    [Fact]
+    public async Task SearchForRunsSearchAndDoesNotSaveTheResult()
+    {
+        string? body = null;
+        var calls = new List<string>();
+        var shown = new List<string>();
+        var backend = Backend(new ScriptedOllama(text =>
+        {
+            body = text;
+            if (text.Contains("\"tools\"", StringComparison.Ordinal))
+                return Error("dolphin-llama3 does not support tools");
+            return Content("Rain tomorrow.");
+        }));
+        backend.RunTool = (tool, args, _) =>
+        {
+            calls.Add(tool + " " + args);
+            return Task.FromResult("{\"results\":[{\"title\":\"Rain\"}]}");
+        };
+        backend.EventReceived += e =>
+        {
+            if (e.Type is "reply_text" or "reply_partial") shown.Add(e.Text ?? "");
+        };
+
+        var reply = await backend.AskAsync("Search for rain tomorrow");
+
+        Assert.Equal("Rain tomorrow.", reply);
+        Assert.Contains(calls, c => c.StartsWith("search", StringComparison.Ordinal) && c.Contains("rain tomorrow"));
+        Assert.DoesNotContain(calls, c => c.Contains("honcho_save"));
+        Assert.Contains("Do not call honcho_save", body);
+        Assert.DoesNotContain(shown, line => line.Contains("\"tool\""));
+    }
+
+    [Fact]
+    public async Task WhatTimeIsItRunsTheTimeTool()
+    {
+        var calls = new List<string>();
+        var backend = Backend(new ScriptedOllama(text =>
+        {
+            if (text.Contains("\"tools\"", StringComparison.Ordinal))
+                return Error("dolphin-llama3 does not support tools");
+            return Content("It is just after noon.");
+        }));
+        backend.RunTool = (tool, args, _) =>
+        {
+            calls.Add(tool + " " + args);
+            return Task.FromResult("{\"time\":\"12:00\"}");
+        };
+        var reply = await backend.AskAsync("What time is it?");
+        Assert.Equal("It is just after noon.", reply);
+        Assert.Equal(new[] { "time {}" }, calls);
+    }
+
+    [Fact]
     public void BuildToolCallToleratesBadArgs()
     {
         var json = AliceLocalBackend.BuildToolCall("search", "{oops");

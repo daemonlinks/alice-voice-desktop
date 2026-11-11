@@ -11,15 +11,15 @@ namespace AliceVoice.Core.Voice;
 /// <summary>
 /// Alice LOCAL — fully local backend. Ollama /api/chat (streamed) with the
 /// Alice LOCAL SOUL as the system prompt, rolling conversation history, and a
-/// small tool loop (own Honcho workspace + web search) through
-/// scripts/alice_local_tools.py.
+/// small tool loop (peer <c>alice_local</c> in the shared Honcho workspace
+/// <c>hermes</c>, plus time and web search) through scripts/alice_local_tools.py.
 /// </summary>
 public sealed class AliceLocalBackend : IVoiceBackend
 {
     private const int MaxToolTurns = 4;
     private static readonly HashSet<string> KnownTools = new(StringComparer.Ordinal)
     {
-        "honcho_search", "honcho_save", "honcho_forget", "search"
+        "honcho_search", "honcho_save", "honcho_forget", "time", "search"
     };
     private readonly AliceVoiceOptions _options;
     private readonly OllamaChatClient _ollama;
@@ -33,16 +33,24 @@ public sealed class AliceLocalBackend : IVoiceBackend
     internal Func<string, string, CancellationToken, Task<string>>? RunTool { get; set; }
 
     internal const string ToolDescriptions =
-        "You have access to these tools. To call one, reply with a JSON object " +
-        "of the form {\"tool\": \"<name>\", \"args\": {...}}. " +
-        "The object may follow a short sentence or sit in a code fence. " +
-        "After the tool result comes back, answer Master in ordinary speech and do not show the JSON.\n" +
-        "- honcho_search: {\"query\": \"...\", \"limit\": 5} — search your own memory about Master.\n" +
-        "- honcho_save: {\"content\": \"...\"} — save a fact about Master for future recall. " +
-        "Call this IMMEDIATELY when Master tells you something to remember. Do NOT say you can't remember — you CAN.\n" +
-        "- honcho_forget: {\"query\": \"...\", \"content\": \"...\"} — remove a fact from memory.\n" +
-        "- search: {\"query\": \"...\"} — web search.\n" +
-        "When Master asks what you know about them, call honcho_search first, then speak the results naturally.";
+        "You can use tools. To call one, reply with ONLY a JSON object " +
+        "of the form {\"tool\": \"<name>\", \"args\": {...}} and no other text. " +
+        "After the tool result comes back, answer Master in ordinary speech and never leave raw JSON in the spoken reply.\n" +
+        "Tools:\n" +
+        "- honcho_search: {\"query\": \"<search terms>\"} — search your memory of Master.\n" +
+        "- honcho_save: {\"content\": \"<fact to remember>\"} — save a fact about Master. " +
+        "When Master states a fact about themselves, call this immediately. Do not say you cannot remember.\n" +
+        "- honcho_forget: {\"content\": \"<exact fact to delete>\"} or {\"query\": \"<search terms>\"} — remove a fact from memory.\n" +
+        "- time: {} — the current local time.\n" +
+        "- search: {\"query\": \"<search terms>\"} — web search. Speak the results naturally. Do not honcho_save search results.\n" +
+        "Trigger phrases:\n" +
+        "- \"Remember that…\" or \"Remember I…\" → honcho_save.\n" +
+        "- \"What do you know about me?\" → honcho_search first, then speak the results.\n" +
+        "- \"Forget that…\", \"Remove that…\", \"Delete that…\", or \"I don't like that anymore\" → honcho_forget.\n" +
+        "- \"What time is it?\" → time.\n" +
+        "- \"Search for…\" → search.\n" +
+        "Your memory is the shared Honcho workspace hermes, peer alice_local, observing AHC. " +
+        "You are a peer in that workspace, not a root workspace. Never use the root workspace id alice_local.";
 
     public AliceLocalBackend(AliceVoiceOptions options, OllamaChatClient? ollama = null)
     {
@@ -132,6 +140,15 @@ public sealed class AliceLocalBackend : IVoiceBackend
             messages.AddRange(_history.Snapshot());
             messages.Add(new ChatMessage("user", prompt));
 
+            if (AliceLocalToolTriggers.TryMatch(prompt, out var triggeredTool, out var triggeredArgs))
+            {
+                var triggeredResult = await ExecuteKnownToolAsync(triggeredTool, triggeredArgs, ct);
+                messages.Add(new ChatMessage("user",
+                    $"[TOOL {triggeredTool} result: {OllamaChatClient.Truncate(triggeredResult, 4000)}]\n" +
+                    "The tool has already run. Answer Master in ordinary speech. Do not show JSON. " +
+                    "Do not call honcho_save on search results."));
+            }
+
             string? lastToolCall = null;
             for (int turn = 0; turn < MaxToolTurns; turn++)
             {
@@ -167,23 +184,7 @@ public sealed class AliceLocalBackend : IVoiceBackend
                 lastToolCall = signature;
                 foreach (var call in calls)
                 {
-                    Log.Information("Alice LOCAL tool call: {Tool}", call.Name);
-                    EventReceived?.Invoke(new BackendEvent("tool_call", call.Name));
-                    OperationTrail.Leave("tool.start", call.Name);
-                    string result;
-                    try
-                    {
-                        result = IsKnownTool(call.Name)
-                            ? await (RunTool ?? RunToolAsync)(call.Name, call.ArgumentsJson, ct)
-                            : UnknownToolResult(call.Name);
-                    }
-                    catch (Exception ex)
-                    {
-                        OperationTrail.Leave("tool.failed", call.Name + " " + ex.GetType().Name);
-                        throw;
-                    }
-                    OperationTrail.Leave("tool.end", call.Name + " chars=" + result.Length);
-                    Log.Information("Alice LOCAL tool finished: {Tool} ({Chars} chars)", call.Name, result.Length);
+                    var result = await ExecuteKnownToolAsync(call.Name, call.ArgumentsJson, ct);
                     messages.Add(new ChatMessage("assistant", BuildToolCall(call.Name, call.ArgumentsJson)));
                     messages.Add(new ChatMessage("user", $"[TOOL {call.Name} result: {OllamaChatClient.Truncate(result, 4000)}]"));
                 }
@@ -196,11 +197,11 @@ public sealed class AliceLocalBackend : IVoiceBackend
         finally { _lock.Release(); }
     }
 
-    /// <summary>Save a fact to Alice LOCAL's own Honcho memory (the "♥ remember" button).</summary>
+    /// <summary>Save a fact to Alice LOCAL's Honcho peer (the "♥ remember" button).</summary>
     public async Task<bool> RememberAsync(string content, CancellationToken ct = default)
     {
-        var args = new JsonObject { ["content"] = content }.ToJsonString();
-        var result = await RunToolAsync("honcho_save", args, ct);
+        var args = new JsonObject { ["content"] = RememberContent(content) }.ToJsonString();
+        var result = await (RunTool ?? RunToolAsync)("honcho_save", args, ct);
         try
         {
             using var doc = JsonDocument.Parse(result);
@@ -209,7 +210,38 @@ public sealed class AliceLocalBackend : IVoiceBackend
         catch (JsonException) { return false; }
     }
 
+    /// <summary>The web remember button stores the reply as "About Master: …".</summary>
+    internal static string RememberContent(string content)
+    {
+        var text = content.Trim();
+        if (text.Length == 0) return text;
+        if (text.StartsWith("About Master:", StringComparison.OrdinalIgnoreCase)) return text;
+        return "About Master: " + text;
+    }
+
     internal static bool IsKnownTool(string tool) => KnownTools.Contains(tool);
+
+    private async Task<string> ExecuteKnownToolAsync(string tool, string argsJson, CancellationToken ct)
+    {
+        Log.Information("Alice LOCAL tool call: {Tool}", tool);
+        EventReceived?.Invoke(new BackendEvent("tool_call", tool));
+        OperationTrail.Leave("tool.start", tool);
+        string result;
+        try
+        {
+            result = IsKnownTool(tool)
+                ? await (RunTool ?? RunToolAsync)(tool, argsJson, ct)
+                : UnknownToolResult(tool);
+        }
+        catch (Exception ex)
+        {
+            OperationTrail.Leave("tool.failed", tool + " " + ex.GetType().Name);
+            throw;
+        }
+        OperationTrail.Leave("tool.end", tool + " chars=" + result.Length);
+        Log.Information("Alice LOCAL tool finished: {Tool} ({Chars} chars)", tool, result.Length);
+        return result;
+    }
 
     internal static string UnknownToolResult(string tool)
         => JsonSerializer.Serialize(new { error = "unknown tool: " + tool });

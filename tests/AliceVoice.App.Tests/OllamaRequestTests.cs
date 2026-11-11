@@ -48,7 +48,10 @@ public class OllamaRequestTests
             [new ChatMessage("user", "hello")], null, null, nativeTools: true, CancellationToken.None);
         using var doc = JsonDocument.Parse(handler.Body);
         Assert.False(doc.RootElement.TryGetProperty("keep_alive", out _));
-        Assert.Equal("honcho_search", doc.RootElement.GetProperty("tools")[0].GetProperty("function").GetProperty("name").GetString());
+        var names = doc.RootElement.GetProperty("tools").EnumerateArray()
+            .Select(t => t.GetProperty("function").GetProperty("name").GetString())
+            .ToArray();
+        Assert.Equal(new[] { "honcho_search", "honcho_save", "honcho_forget", "time", "search" }, names);
         Assert.Equal("honcho_search", completion.ToolCalls[0].Name);
         Assert.Contains("name", completion.ToolCalls[0].ArgumentsJson);
     }

@@ -187,16 +187,21 @@ public sealed class OllamaChatClient : IDisposable
             },
             ["required"] = new[] { "content" }
         }),
-        Tool("honcho_forget", "Remove a fact from memory.", new Dictionary<string, object>
+        Tool("honcho_forget", "Remove a fact from memory. Pass content for an exact fact, or query for search terms.", new Dictionary<string, object>
         {
             ["type"] = "object",
             ["properties"] = new Dictionary<string, object>
             {
-                ["query"] = new Dictionary<string, object> { ["type"] = "string" },
-                ["content"] = new Dictionary<string, object> { ["type"] = "string" }
+                ["query"] = new Dictionary<string, object> { ["type"] = "string", ["description"] = "Search terms" },
+                ["content"] = new Dictionary<string, object> { ["type"] = "string", ["description"] = "Exact fact to delete" }
             }
         }),
-        Tool("search", "Search the web.", new Dictionary<string, object>
+        Tool("time", "The current local time.", new Dictionary<string, object>
+        {
+            ["type"] = "object",
+            ["properties"] = new Dictionary<string, object>()
+        }),
+        Tool("search", "Search the web. Do not save the results to memory.", new Dictionary<string, object>
         {
             ["type"] = "object",
             ["properties"] = new Dictionary<string, object>

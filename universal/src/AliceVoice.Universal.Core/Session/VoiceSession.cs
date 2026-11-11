@@ -159,7 +159,7 @@ public sealed class VoiceSession : IAsyncDisposable
     public StageLamp SttLamp { get; private set; } = StageLamp.Dim;
     public StageLamp LlmLamp { get; private set; } = StageLamp.Dim;
     public StageLamp TtsLamp { get; private set; } = StageLamp.Dim;
-    public StageLamp ApiLamp { get; private set; } = StageLamp.Dim;
+    public StageLamp ApiLamp { get; private set; } = StageLamp.Red;
     public string StageError { get; private set; } = "";
 
     public string AgentLabel { get; private set; } = "Alice LOCAL";
@@ -250,6 +250,7 @@ public sealed class VoiceSession : IAsyncDisposable
     {
         StatusText = "Connecting…";
         SetActivity("Connecting…");
+        ApiLamp = StageLamp.Yellow;
         Touch();
         try
         {
@@ -293,6 +294,7 @@ public sealed class VoiceSession : IAsyncDisposable
         CancelTurn();
         SetConnected(false);
         StatusText = "Ready";
+        SetActivity("Offline");
         RefreshStatus();
         Touch();
     }
@@ -1109,7 +1111,7 @@ public sealed class VoiceSession : IAsyncDisposable
     private void SetConnected(bool connected)
     {
         Connected = connected;
-        ApiLamp = connected ? StageLamp.Green : StageLamp.Dim;
+        ApiLamp = connected ? StageLamp.Green : StageLamp.Red;
         WsDisplay = connected ? "api·on" : "api·off";
         RefreshStatus();
     }

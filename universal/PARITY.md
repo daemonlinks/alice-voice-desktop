@@ -93,18 +93,20 @@ DirectML adapter numbers are not NVIDIA indexes and could land on GPU 0.
 | Local Ollama and the alice_voice agent backend | Registered, not selected by the window. Fleet members go through `IFleetChat` | Still registered, still not on the agent picker | Same |
 | Context sliders | Key points (2), memory items (1), char limit (80). **Disabled.** Tooltip: context injection is controlled by the agent | Still disabled, same tooltip, same defaults shown | Same. Not implemented, on purpose |
 
-Trigger phrases shown in Keywords & Tools are unchanged:
-`Remember that… · Remember I… · What do you know about me? · Forget that… · Remove that… · Delete that… · I don't like that anymore · Search for…`
-Tools: `honcho_search · honcho_save · honcho_forget · search (Alice LOCAL)`.
+Trigger phrases in Keywords & Tools match the web panel:
+`Remember that… · Remember I… · What do you know about me? · Forget that… · Remove that… · Delete that… · I don't like that anymore · What time is it? · Search for…`
+Tools: `honcho_search · honcho_save · honcho_forget · time · search (Alice LOCAL)`.
+Saying one of those phrases in a turn runs that tool, then Alice speaks the result. A bare "I don't like that anymore" is left for the model, because the fact is in the conversation. The ♥ remember button saves `About Master: …`.
 
 ## Honcho and the tool bridge
 
 | | Detail |
 |---|---|
-| Script | `scripts/alice_local_tools.py`. App U does not fork it |
-| Honcho | `HONCHO_BASE`, default `http://localhost:8001`. Local server runs with auth disabled. `HONCHO_API_KEY` is sent only when it is set. No key is hardcoded |
-| Workspace | `alice_local`, peers `AHC` / `alice_local`, overridable by env |
-| Web search | Tavily. The key is read from the environment or `%ProgramData%\AliceVoice\.env` (`ALICEVOICE_ENV`). Never logged |
+| Script | `scripts/alice_local_tools.py`. App U does not fork it. The model is taught to reply with only `{"tool","args"}`. The same phrases also run the tool before the model speaks |
+| Honcho | `HONCHO_BASE`, default `http://localhost:8001`. Local server runs with auth disabled (`AUTH_USE_AUTH` false). `HONCHO_API_KEY` is sent only when it is set. No key is hardcoded |
+| Workspace | Shared workspace `hermes` (Hermes in the Honcho UI). User peer `AHC`. Alice LOCAL's peer is `alice_local` (`observer` / `observer_id`). She is not a root workspace. The stray root workspace id `alice_local` is never used. `HONCHO_WORKSPACE`, `HONCHO_PEER`, and `HONCHO_AI_PEER` are ignored |
+| Web search | Tavily. The key is read from the environment or `%ProgramData%\AliceVoice\.env` (`ALICEVOICE_ENV`). Never logged. Search results are not saved back into Honcho |
+| Time | `time` with empty args. The script returns the Beast's local time. It does not call Honcho |
 | Where it runs | Always on the Beast, inside `AliceLocalBackend`. The phone never runs Python and never sees the key file |
 | Timeout | 60 s per tool, 4 tool turns, then the same "tangled up in my tools" line |
 
@@ -184,7 +186,7 @@ path. Env still wins.
 | `ALICEVOICE_WAKE_END_SILENCE_MS`, `ALICEVOICE_WAKE_SPEECH_RMS`, `ALICEVOICE_WAKE_NO_SPEECH_MS`, `ALICEVOICE_WAKE_MAX_SECONDS` | VAD | Same clamps as `AliceVoiceOptions` |
 | `HERMES_HOME` | Hermes install, default `%LOCALAPPDATA%\hermes` | Original |
 | `API_SERVER_KEY` | Else Hermes `.env` | Resolved on the Beast only, when the bridge handles fleet chat |
-| `HONCHO_BASE`, `HONCHO_API_KEY`, `HONCHO_WORKSPACE`, `HONCHO_PEER`, `HONCHO_AI_PEER`, `TAVILY_API_KEY`, `ALICEVOICE_ENV` | Tool script | Unchanged. Not copied into C# |
+| `HONCHO_BASE`, `HONCHO_API_KEY`, `TAVILY_API_KEY`, `ALICEVOICE_ENV` | Tool script | Base URL and optional key only. `HONCHO_WORKSPACE`, `HONCHO_PEER`, and `HONCHO_AI_PEER` are ignored so Alice LOCAL stays on workspace `hermes`, peer `alice_local`, user `AHC` |
 | `ALICEVOICE_BEAST_HOST`, `ALICEVOICE_BRIDGE_PORT`, `ALICEVOICE_BRIDGE_BIND`, `ALICEVOICE_BRIDGE_ALLOW_UNSAFE_BIND` | App U only | Android defaults the host to `ahc-the-beast`. The bind is Tailscale-only unless the override flag is `1` |
 
 | Path | Role | App U |
@@ -218,7 +220,7 @@ images), VU meter from about -40 dBFS to 0 on a 100 px bar.
 
 - Run the Windows head on the Beast and confirm a full Talk → GPU STT → Ollama → AllTalk loop against the live services. The code path is the original one; it has not been executed on that machine in this run.
 - Run the APK on a handset: mic permission, a wake detection, a bridged turn, SOUL save, remember. The package builds; the handset pass has not happened.
-- Pixel-identical layout. The MAUI page has the same controls and the same strings. It is not the WinUI XAML.
+- Pixel-identical layout. App U has its own hierarchy: header, live status lamps, conversation, talk dock, then agent and the collapsed panels. It is not a copy of the WinUI XAML. The scene image is AspectFit on both heads.
 - Context sliders, because the WinUI app leaves them disabled.
 - The experimental ONNX Whisper engine, because the WinUI app does not register it.
 - A handset install of a signed APK. The code will offer one after the Beast re-signs `version.json`. The committed manifest is still the original MSIX pair.

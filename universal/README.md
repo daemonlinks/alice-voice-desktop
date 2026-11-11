@@ -1,7 +1,8 @@
 # Alice Voice App U
 
 .NET MAUI head for Alice Voice. Windows and Android. The WinUI app in the
-repo root is unchanged and is still the one `AliceVoice.sln` builds.
+repo root is still the one `AliceVoice.sln` builds. Its Keywords & Tools
+panel names the same workspace, peer, and tools.
 
 App U calls the same `AliceVoice.Core` services on Windows (GPU speech-to-text,
 SOUL file, Honcho tools, fleet chat, signed update check, openWakeWord). On
@@ -20,7 +21,58 @@ universal/
 ```
 
 `AliceVoice.Core` stays where it is. The universal solution references it.
-Nothing in `src/AliceVoice.App` or the original tests was edited.
+
+## Scene image
+
+The background is an `Image` with `Aspect="AspectFit"` (Uniform), behind the
+page, on Windows and Android. The whole picture stays visible. A taller
+screen letterboxes it (bars above and below). A wider screen pillarboxes it
+(bars on the sides). Resizing the window refits the same way. The image is
+not cropped (`AspectFill` / UniformToFill) and not stretched. The bars use
+the page background colour. Chrome is drawn on top of that fitted image.
+
+## Page
+
+The page is, from top to bottom: the title and connection, a row of live
+status lamps, the conversation (or the SOUL editor), the talk controls, then
+agent, voice, and the collapsed panels. The lamps are the real session
+state. Green is connected or a stage that succeeded. Amber is work in
+progress (connecting, listening, transcribing, thinking, speaking). Red is
+offline or a failed stage. An idle stage that has not run stays dim. The
+connection lamp is red until Connect succeeds, amber while connecting, and
+green once the link is up. A turn in progress does not turn that lamp amber;
+the activity lamp and the stage that is working do.
+
+## Alice LOCAL memory and tools
+
+Alice LOCAL's memory is the shared Honcho workspace `hermes` (Hermes in the
+Honcho UI). Her peer is `alice_local`, observing the user peer `AHC`. She is
+not a root workspace. The stray root workspace whose id is `alice_local` is
+left in place and is not read or written by this app. `HONCHO_WORKSPACE`,
+`HONCHO_PEER`, and `HONCHO_AI_PEER` are ignored. Honcho is
+`http://localhost:8001` unless `HONCHO_BASE` is set. Local Honcho runs with
+authentication disabled. `HONCHO_API_KEY` is sent only when one is configured.
+No key is stored in source.
+
+Her persona is her own SOUL file,
+`%ProgramData%\AliceVoice\alice_local\SOUL.md`, shared with the Windows app
+and the web relay. Tool instructions are appended by `AliceLocalBackend`.
+They are not copied from another agent's prompt. The tools and the phrases
+that call them match the web Keywords & Tools panel:
+
+| Phrase | Tool | Arguments |
+|---|---|---|
+| Remember that… / Remember I… | `honcho_save` | `{"content":"<fact>"}` |
+| What do you know about me? | `honcho_search` | `{"query":"Master"}` |
+| Forget that… / Remove that… / Delete that… | `honcho_forget` | `{"content":"<fact>"}` or `{"query":"<terms>"}` |
+| I don't like that anymore | `honcho_forget` | The model chooses the fact from the conversation |
+| What time is it? | `time` | `{}` |
+| Search for… | `search` | `{"query":"<terms>"}` |
+
+The model is told to reply with only `{"tool":"<name>","args":{...}}`, then
+to speak the result in ordinary words. Search results are not saved. The
+♥ remember button on a reply sends `honcho_save` with `About Master: …`.
+Phone and PC share one Alice LOCAL conversation, so they share this peer.
 
 ## Tests
 
