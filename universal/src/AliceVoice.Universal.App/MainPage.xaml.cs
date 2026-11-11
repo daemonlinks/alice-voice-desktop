@@ -194,14 +194,20 @@ public partial class MainPage : ContentPage
         foreach (var entry in _session.Transcript)
         {
             var card = new VerticalStackLayout { Spacing = 2, Padding = 8, MaximumWidthRequest = 640 };
-            card.Children.Add(new Label
+            if (entry.Kind == TranscriptKind.System)
             {
-                Text = entry.Kind == TranscriptKind.System ? entry.Text : $"{entry.Speaker}  #{entry.Turn} · {entry.At:HH:mm:ss}",
-                FontSize = 10,
-                TextColor = Color.FromArgb("#73737E")
-            });
-            if (entry.Kind != TranscriptKind.System)
-                card.Children.Add(new Label { Text = entry.Text, TextColor = Color.FromArgb("#E8E8ED"), LineBreakMode = LineBreakMode.WordWrap });
+                card.Children.Add(MessageText(entry.Text, 10, "#73737E"));
+            }
+            else
+            {
+                card.Children.Add(new Label
+                {
+                    Text = $"{entry.Speaker}  #{entry.Turn} · {entry.At:HH:mm:ss}",
+                    FontSize = 10,
+                    TextColor = Color.FromArgb("#73737E")
+                });
+                card.Children.Add(MessageText(entry.Text, 13, "#E8E8ED"));
+            }
             if (entry.ShowRemember)
             {
                 var remember = new Button { Text = entry.RememberLabel };
@@ -232,6 +238,18 @@ public partial class MainPage : ContentPage
             });
         }
     }
+
+    /// <summary>
+    /// Message text, not the speaker line. SelectableLabel is what makes a
+    /// drag highlight the words. A plain Label cannot.
+    /// </summary>
+    private static SelectableLabel MessageText(string text, int fontSize, string color) => new SelectableLabel
+    {
+        Text = text,
+        FontSize = fontSize,
+        TextColor = Color.FromArgb(color),
+        LineBreakMode = LineBreakMode.WordWrap
+    };
 
     private void FillLog()
     {

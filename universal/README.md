@@ -43,6 +43,12 @@ connection lamp is red until Connect succeeds, amber while connecting, and
 green once the link is up. A turn in progress does not turn that lamp amber;
 the activity lamp and the stage that is working do.
 
+Message text in a conversation bubble can be highlighted and copied. On
+Windows, drag across the words, then Ctrl+C, or use the Copy item on the
+right-click menu (the highlight if there is one, otherwise the whole line).
+On Android, long-press the message and use the system copy action. The
+speaker and time line is not selectable. Status lamps are unchanged.
+
 ## Alice LOCAL memory and tools
 
 Alice LOCAL's memory is the shared Honcho workspace `hermes` (Hermes in the

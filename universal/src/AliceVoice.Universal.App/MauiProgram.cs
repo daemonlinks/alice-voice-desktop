@@ -24,6 +24,7 @@ public static partial class MauiProgram
             UniversalLogging.Configure(host.LogDirectory);
             OperationTrail.Leave("startup.logging");
 
+            SelectableTranscript.Register();
             var builder = MauiApp.CreateBuilder();
             builder.UseMauiApp<App>();
             builder.Services.AddUniversal(host);

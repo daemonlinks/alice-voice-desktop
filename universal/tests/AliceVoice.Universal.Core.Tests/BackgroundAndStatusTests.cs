@@ -75,6 +75,30 @@ public class BackgroundAndStatusTests
         Assert.DoesNotContain("BackgroundImageSource", xaml + code);
     }
 
+    [Theory]
+    [InlineData("Hello Master", null, "Hello Master")]
+    [InlineData("Hello Master", "", "Hello Master")]
+    [InlineData("Hello Master", "Master", "Master")]
+    [InlineData(null, null, "")]
+    public void CopyUsesTheHighlightWhenThereIsOne(string? message, string? selected, string expected)
+        => Assert.Equal(expected, TranscriptCopy.Text(message, selected));
+
+    [Fact]
+    public void ConversationMessagesAreSelectableLabels()
+    {
+        var page = File.ReadAllText(RepoFile("universal/src/AliceVoice.Universal.App/MainPage.xaml.cs"));
+        var selection = File.ReadAllText(RepoFile("universal/src/AliceVoice.Universal.App/SelectableTranscript.cs"));
+        var scene = File.ReadAllText(RepoFile("universal/src/AliceVoice.Universal.App/MainPage.xaml"));
+        Assert.Contains("new SelectableLabel", page);
+        Assert.Contains("MessageText(entry.Text", page);
+        Assert.DoesNotContain("new Label { Text = entry.Text", page);
+        Assert.Contains("IsTextSelectionEnabled = true", selection);
+        Assert.Contains("SetTextIsSelectable(true)", selection);
+        Assert.Contains("TranscriptCopy.Text", selection);
+        Assert.Contains("InputTransparent=\"True\"", scene);
+        Assert.Equal("Copy", TranscriptCopy.Action);
+    }
+
     [Fact]
     public void LampsUseGreenAmberAndRedForLiveState()
     {
