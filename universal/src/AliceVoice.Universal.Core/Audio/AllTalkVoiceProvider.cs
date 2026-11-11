@@ -72,7 +72,7 @@ public sealed class AllTalkVoiceProvider : IVoiceProvider, IDisposable
 
     private async Task<byte[]?> GenerateAsync(string text, string voice, CancellationToken ct)
     {
-        var v = string.IsNullOrEmpty(voice) ? DefaultVoice : voice;
+        var v = string.IsNullOrWhiteSpace(voice) ? DefaultVoice : voice;
         using var form = new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["text_input"] = text,
@@ -103,9 +103,8 @@ public sealed class AllTalkVoiceProvider : IVoiceProvider, IDisposable
         }
 
         var audioUrl = urlEl.GetString();
-        if (string.IsNullOrEmpty(audioUrl)) return null;
-        if (!Uri.TryCreate(audioUrl, UriKind.Absolute, out _))
-            audioUrl = BaseUrl + (audioUrl.StartsWith('/') ? "" : "/") + audioUrl;
+        if (string.IsNullOrWhiteSpace(audioUrl)) return null;
+        audioUrl = AllTalkOutputUrl.Resolve(BaseUrl, audioUrl);
 
         var wav = await _http.GetByteArrayAsync(audioUrl, ct);
         Log.Information("AllTalk generated {Bytes} bytes", wav.Length);
