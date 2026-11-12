@@ -86,7 +86,35 @@ public sealed class AliceVoiceOptions
     [JsonIgnore] public string AppDataDir => Path.Combine(LocalAppData, "AliceVoice");
     /// <summary>Machine-wide Alice Voice data shared with the web relay (%ProgramData%\AliceVoice).</summary>
     [JsonIgnore] public string SharedDataDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "AliceVoice");
-    [JsonIgnore] public string HermesHome => Environment.GetEnvironmentVariable("HERMES_HOME") is { Length: > 0 } h ? h : Path.Combine(LocalAppData, "hermes");
+
+    /// <summary>
+    /// Candidate hermes homes, most-trusted first. A folder only counts as a hermes
+    /// home if it holds a <c>profiles</c> directory: HERMES_HOME is inherited from
+    /// whatever launched the app, and a Hermes agent session sets it to ONE profile
+    /// (<c>...\hermes\profiles\alice_4</c>), under which every other profile's files
+    /// vanish — that silently 401'd six of ten fleet members on 2026-11-12. The
+    /// standard install home is always a candidate; if nothing validates we fall back
+    /// to the listed homes anyway, so an unusual install still resolves.
+    /// </summary>
+    [JsonIgnore] public IReadOnlyList<string> HermesHomeCandidates
+    {
+        get
+        {
+            var listed = new List<string>();
+            void Add(string? p)
+            {
+                if (string.IsNullOrWhiteSpace(p)) return;
+                var full = Path.GetFullPath(p!);
+                if (!listed.Any(x => string.Equals(x, full, StringComparison.OrdinalIgnoreCase))) listed.Add(full);
+            }
+            Add(Environment.GetEnvironmentVariable("HERMES_HOME"));
+            Add(Path.Combine(LocalAppData, "hermes"));
+            var valid = listed.Where(h => Directory.Exists(Path.Combine(h, "profiles"))).ToList();
+            return valid.Count > 0 ? valid : listed;
+        }
+    }
+
+    [JsonIgnore] public string HermesHome => HermesHomeCandidates[0];
 
     [JsonIgnore] public string ResolvedAliceLocalSoulPath => AliceLocalSoulPath ?? Path.Combine(SharedDataDir, "alice_local", "SOUL.md");
     [JsonIgnore] public string ResolvedBackgroundsDir => BackgroundsDir ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "ahc-the-beast", "voice", "Mirrored");
