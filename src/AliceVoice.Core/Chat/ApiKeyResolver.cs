@@ -15,32 +15,45 @@ public static class ApiKeyResolver
     /// <summary>The shared key: process environment, then the hermes .env files.</summary>
     public static string Resolve() => Shared();
 
+    /// <summary>The key for a roster member (prefer this form — see the three-argument one).</summary>
+    public static string Resolve(FleetMember member) =>
+        Resolve(member.Name, member.Profile, member.BaseUrl);
+
     /// <summary>
-    /// The key for a roster member's profile, looked up on the host that serves it:
-    ///   1. env <c>API_SERVER_KEY_&lt;PROFILE&gt;</c> — explicit override, and the only
-    ///      route for a host whose key is not on this filesystem (the VPS).
+    /// The key for a roster member, looked up on the host that serves it:
+    ///   1. env <c>API_SERVER_KEY_&lt;MEMBER&gt;</c> — explicit override, keyed by the MEMBER
+    ///      name and NOT the profile: alice_windows, alice_5 and alice_arena all use the
+    ///      profile `default` on three different hosts, each with its own key, so a
+    ///      profile-keyed variable would hand one host's key to the others. This is also the
+    ///      only route for a host whose key is not on this filesystem (the VPS).
     ///   2. That profile's own .env on the serving host:
     ///      Windows hermes → <c>&lt;hermes&gt;\profiles\&lt;profile&gt;\.env</c>, then <c>&lt;hermes&gt;\.env</c>
     ///      WSL host       → <c>\\wsl.localhost\Ubuntu\home\ahc\.hermes\...</c>
     ///      (the WSL home is readable from Windows — verified 2026-11-12)
     ///   3. The shared key.
     /// </summary>
-    public static string Resolve(string? profile, string? baseUrl)
+    public static string Resolve(string name, string? profile, string? baseUrl)
     {
-        var cacheKey = $"{profile}|{baseUrl}";
+        var cacheKey = $"{name}|{profile}|{baseUrl}";
         if (Cache.TryGetValue(cacheKey, out var hit)) return hit;
-        var value = Lookup(profile, baseUrl);
+        var value = Lookup(name, profile, baseUrl);
         Cache[cacheKey] = value;
         return value;
     }
 
-    private static string Lookup(string? profile, string? baseUrl)
+    /// <summary>Drop cached keys — for tests, and after a key rotation.</summary>
+    public static void ClearCache() => Cache.Clear();
+
+    private static string Lookup(string? name, string? profile, string? baseUrl)
     {
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            var env = Environment.GetEnvironmentVariable($"API_SERVER_KEY_{name.ToUpperInvariant()}");
+            if (!string.IsNullOrEmpty(env)) return env;
+        }
+
         if (!string.IsNullOrWhiteSpace(profile))
         {
-            var env = Environment.GetEnvironmentVariable($"API_SERVER_KEY_{profile.ToUpperInvariant()}");
-            if (!string.IsNullOrEmpty(env)) return env;
-
             foreach (var path in ProfileEnvCandidates(profile, baseUrl))
             {
                 var v = ReadKey(path);
