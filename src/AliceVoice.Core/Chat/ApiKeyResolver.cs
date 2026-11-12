@@ -79,9 +79,11 @@ public static class ApiKeyResolver
         // filesystem, so the env override above is the only route.
         if (IsVpsHost(baseUrl)) yield break;
 
-        var hermes = new AliceVoiceOptions().HermesHome;
-        yield return Path.Combine(hermes, "profiles", profile, ".env");
-        yield return Path.Combine(hermes, ".env");
+        foreach (var hermes in new AliceVoiceOptions().HermesHomeCandidates)
+        {
+            yield return Path.Combine(hermes, "profiles", profile, ".env");
+            yield return Path.Combine(hermes, ".env");
+        }
     }
 
     private static bool IsWslHost(string? baseUrl) =>
@@ -95,18 +97,20 @@ public static class ApiKeyResolver
         var env = Environment.GetEnvironmentVariable("API_SERVER_KEY");
         if (!string.IsNullOrEmpty(env)) return env;
 
-        var hermes = new AliceVoiceOptions().HermesHome;
-        var candidates = new[]
+        foreach (var hermes in new AliceVoiceOptions().HermesHomeCandidates)
         {
-            Path.Combine(hermes, ".env"),
-            Path.Combine(hermes, "profiles", "alice_voice", ".env"),
-            Path.Combine(hermes, "profiles", "default", ".env")
-        };
+            var candidates = new[]
+            {
+                Path.Combine(hermes, ".env"),
+                Path.Combine(hermes, "profiles", "alice_voice", ".env"),
+                Path.Combine(hermes, "profiles", "default", ".env")
+            };
 
-        foreach (var path in candidates)
-        {
-            var v = ReadKey(path);
-            if (!string.IsNullOrEmpty(v)) return v;
+            foreach (var path in candidates)
+            {
+                var v = ReadKey(path);
+                if (!string.IsNullOrEmpty(v)) return v;
+            }
         }
 
         return "";
