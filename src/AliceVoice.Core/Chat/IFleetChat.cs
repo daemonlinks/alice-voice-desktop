@@ -146,7 +146,7 @@ public sealed class HermesApiFleetChat : IFleetChat, IDisposable
     /// shared key, else that profile's OWN key on the host that serves it.
     /// </summary>
     private string KeyFor(FleetMember member) =>
-        member.ApiKey ?? (_sharedKeyExplicit ? _sharedKey : ApiKeyResolver.Resolve(member.Profile, member.BaseUrl));
+        member.ApiKey ?? (_sharedKeyExplicit ? _sharedKey : ApiKeyResolver.Resolve(member));
 
     public void Dispose() => _http.Dispose();
 }

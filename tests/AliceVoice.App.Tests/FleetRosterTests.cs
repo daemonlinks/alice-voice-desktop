@@ -62,8 +62,8 @@ public class FleetRosterTests
     public void AProfileKeyIsFoundForEachLocalProfile()
     {
         // alice_voice's key lives in her own profile .env on this host.
-        Assert.NotEmpty(ApiKeyResolver.Resolve("alice_voice", null));
-        Assert.NotEmpty(ApiKeyResolver.Resolve("default", null));
+        Assert.NotEmpty(ApiKeyResolver.Resolve("alice_voice", "alice_voice", null));
+        Assert.NotEmpty(ApiKeyResolver.Resolve("alice_windows", "default", null));
     }
 
     [Fact]
@@ -77,6 +77,49 @@ public class FleetRosterTests
 
         Assert.True(File.Exists($@"{shareRoot}\profiles\alice_1\.env"),
             "the WSL share is visible, so alice_1's .env should exist");
-        Assert.NotEmpty(ApiKeyResolver.Resolve("alice_1", FleetRoster.WslBaseUrl));
+        Assert.NotEmpty(ApiKeyResolver.Resolve("alice_1", "alice_1", FleetRoster.WslBaseUrl));
+    }
+
+    [Fact]
+    public void TheEnvOverrideIsKeyedByMemberNotProfile()
+    {
+        // alice_windows, alice_5 and alice_arena all use the profile `default`, on three
+        // different hosts with three different keys. A profile-keyed override would hand
+        // one host's key to the others, so the override is keyed by MEMBER name.
+        const string probe = "probe-not-a-real-key";
+        Environment.SetEnvironmentVariable("API_SERVER_KEY_ALICE_ARENA", probe);
+        ApiKeyResolver.ClearCache();
+        try
+        {
+            Assert.Equal(probe, ApiKeyResolver.Resolve("alice_arena", "default", FleetRoster.VpsBaseUrl));
+            Assert.NotEqual(probe, ApiKeyResolver.Resolve("alice_windows", "default", null));
+            Assert.NotEqual(probe, ApiKeyResolver.Resolve("alice_5", "default", FleetRoster.WslBaseUrl));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("API_SERVER_KEY_ALICE_ARENA", null);
+            Environment.SetEnvironmentVariable("API_SERVER_KEY_DEFAULT", null);
+            ApiKeyResolver.ClearCache();
+        }
+    }
+
+    [Fact]
+    public void AProfileKeyedOverrideWouldNotBeUsed()
+    {
+        // The collision this guards against: API_SERVER_KEY_DEFAULT must NOT be read,
+        // because `default` is a profile name on three hosts at once.
+        const string probe = "probe-profile-keyed";
+        Environment.SetEnvironmentVariable("API_SERVER_KEY_DEFAULT", probe);
+        ApiKeyResolver.ClearCache();
+        try
+        {
+            Assert.NotEqual(probe, ApiKeyResolver.Resolve("alice_windows", "default", null));
+            Assert.NotEqual(probe, ApiKeyResolver.Resolve("alice_arena", "default", FleetRoster.VpsBaseUrl));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("API_SERVER_KEY_DEFAULT", null);
+            ApiKeyResolver.ClearCache();
+        }
     }
 }
