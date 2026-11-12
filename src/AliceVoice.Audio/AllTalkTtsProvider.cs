@@ -66,7 +66,7 @@ public sealed class AllTalkTtsProvider : IVoiceProvider, IDisposable
 
     private async Task<byte[]?> GenerateAsync(string text, string voice, CancellationToken ct)
     {
-        var v = string.IsNullOrEmpty(voice) ? DefaultVoice : voice;
+        var v = string.IsNullOrWhiteSpace(voice) ? DefaultVoice : voice;
         using var form = new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["text_input"] = text,
@@ -98,10 +98,11 @@ public sealed class AllTalkTtsProvider : IVoiceProvider, IDisposable
         }
 
         var audioUrl = urlEl.GetString();
-        if (string.IsNullOrEmpty(audioUrl)) return null;
-        // AllTalk v2 returns a server-relative path ("/audio/x.wav").
-        if (!Uri.TryCreate(audioUrl, UriKind.Absolute, out _))
-            audioUrl = _baseUrl + (audioUrl.StartsWith('/') ? "" : "/") + audioUrl;
+        if (string.IsNullOrWhiteSpace(audioUrl)) return null;
+        // A relative path is joined to this client's base. An absolute
+        // loopback URL is the same file, but named as 127.0.0.1; fetch it
+        // from the host this client actually called.
+        audioUrl = AllTalkOutputUrl.Resolve(_baseUrl, audioUrl);
 
         var wav = await _http.GetByteArrayAsync(audioUrl, ct);
         Log.Information("AllTalk generated {Bytes} bytes", wav.Length);

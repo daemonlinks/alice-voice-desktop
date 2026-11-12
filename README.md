@@ -96,6 +96,19 @@ index, but 0 is refused. With no eligible GPU, STT falls back to CPU (`base` mod
 | Hermes api_server (fleet chat) | `http://127.0.0.1:8643` | `ALICEVOICE_HERMES_URL` |
 | Ollama (Alice LOCAL) | `http://localhost:11434` | `ALICEVOICE_OLLAMA_URL` |
 | AllTalk TTS | `http://127.0.0.1:7851` | `ALICEVOICE_ALLTALK_URL` |
+| Honcho (Alice LOCAL memory) | `http://localhost:8001` | `HONCHO_BASE` |
+
+Alice LOCAL memory is the shared Honcho workspace `hermes`, peer
+`alice_local`, observing `AHC`. It is not a root workspace, and the stray
+root workspace id `alice_local` is not used. `scripts/alice_local_tools.py`
+ignores `HONCHO_WORKSPACE`, `HONCHO_PEER`, and `HONCHO_AI_PEER`. Local Honcho
+runs with auth disabled; `HONCHO_API_KEY` is sent only when it is set. No key
+is stored in source. Tools, matching the web relay: `honcho_search`,
+`honcho_save`, `honcho_forget`, `time`, `search`. Trigger phrases: Remember
+that…, Remember I…, What do you know about me?, Forget that…, Remove that…,
+Delete that…, I don't like that anymore, What time is it?, Search for….
+The model replies with only `{"tool":"<name>","args":{...}}`, then speaks.
+The ♥ remember button saves `About Master: …`.
 
 The Hermes API key is read from the Hermes `.env` (`API_SERVER_KEY`); key
 values are never logged.

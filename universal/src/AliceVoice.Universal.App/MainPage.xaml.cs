@@ -26,6 +26,9 @@ public partial class MainPage : ContentPage
         InitializeComponent();
         HelpTriggers.Text = SessionCopy.HelpTriggers;
         HelpTools.Text = SessionCopy.HelpTools;
+        HelpHoncho.Text = SessionCopy.HelpHoncho;
+        // AspectFit is also set in XAML. Restated here so a fill/crop mode is not introduced in code.
+        SceneImage.Aspect = Aspect.AspectFit;
     }
 
     protected override async void OnAppearing()
@@ -78,17 +81,13 @@ public partial class MainPage : ContentPage
         try
         {
             BrandBadge.Text = $"v{_session.Version} · yours";
-            PresenceText.Text = _session.Connected ? "here with you" : "offline";
-            PresenceDot.Color = Color.FromArgb(_session.Connected ? "#22C55E" : "#73737E");
+            ApplyLamps();
             ActivityLine.Text = _session.Activity;
-            ActivityDetail.Text = _session.ActivityDetail;
-            ActivityDot.Color = Color.FromArgb(_session.Activity switch
-            {
-                "Listening…" or "Transcribing…" or "Thinking…" or "Speaking…" or "Connecting…" => "#EAB308",
-                "Ready" => "#22C55E",
-                _ => "#73737E"
-            });
-            StatusLine.Text = $"Agent: {_session.AgentLabel}   Backend: {_session.BackendLabel}   Provider: {_session.ProviderLabel}   Voice: {_session.VoiceLabel}   Connection: {_session.ConnectionLabel}   Pipeline: {Lamp(_session.MicLamp)} Mic  {Lamp(_session.SttLamp)} STT  {Lamp(_session.LlmLamp)} LLM  {Lamp(_session.TtsLamp)} TTS  {Lamp(_session.ApiLamp)} API  {_session.StageError}";
+            var stageNote = string.IsNullOrEmpty(_session.StageError) ? "" : _session.StageError;
+            ActivityDetail.Text = string.IsNullOrEmpty(stageNote)
+                ? _session.ActivityDetail
+                : string.IsNullOrEmpty(_session.ActivityDetail) ? stageNote : _session.ActivityDetail + " · " + stageNote;
+            StatusLine.Text = $"Agent: {_session.AgentLabel} · {_session.BackendLabel} · {_session.ProviderLabel} · {_session.VoiceLabel} · {_session.ConnectionLabel}";
             StatusText.Text = _session.StatusText;
             UpdateBanner.IsVisible = !string.IsNullOrEmpty(_session.UpdateBanner);
             UpdateBanner.Text = _session.UpdateBanner ?? "";
@@ -98,7 +97,7 @@ public partial class MainPage : ContentPage
             TalkButton.Text = _session.TalkButtonText;
             TalkButton.IsEnabled = _session.TalkEnabled;
             MicTag.Text = _session.MicTag;
-            MicTag.TextColor = Color.FromArgb(_session.MicTagLamp == StageLamp.Green ? "#22C55E" : "#EF4444");
+            MicTag.TextColor = Tone(StatusTones.Mic(_session.MicLamp, _session.MicTagLamp, _session.Activity));
             WakeWordLabel.Text = _session.WakeWordLabel;
             SensitivityValue.Text = _session.SensitivityText;
             WakeScore.Text = _session.WakeScoreText;
@@ -112,6 +111,7 @@ public partial class MainPage : ContentPage
             TranscriptScroll.IsVisible = _session.Mode != "soul";
             if (_session.Mode == "soul" && SoulText.Text != _session.SoulText) SoulText.Text = _session.SoulText;
             SoulStatus.Text = _session.SoulStatus;
+            SoulStatus.TextColor = Tone(StatusTones.ForNote(_session.SoulKind));
             Paint(ModePtt, _session.Mode == "ptt");
             Paint(ModeWake, _session.Mode == "wake");
             Paint(ModeText, _session.Mode == "text");
@@ -156,6 +156,7 @@ public partial class MainPage : ContentPage
             VuFill.WidthRequest = _session.VuWidth;
             WakeScore.Text = _session.WakeScoreText;
             MicTag.Text = _session.MicTag;
+            MicTag.TextColor = Tone(StatusTones.Mic(_session.MicLamp, _session.MicTagLamp, _session.Activity));
         }
         catch (Exception ex) { NotePaintFailure(ex); }
     }
@@ -193,14 +194,20 @@ public partial class MainPage : ContentPage
         foreach (var entry in _session.Transcript)
         {
             var card = new VerticalStackLayout { Spacing = 2, Padding = 8, MaximumWidthRequest = 640 };
-            card.Children.Add(new Label
+            if (entry.Kind == TranscriptKind.System)
             {
-                Text = entry.Kind == TranscriptKind.System ? entry.Text : $"{entry.Speaker}  #{entry.Turn} · {entry.At:HH:mm:ss}",
-                FontSize = 10,
-                TextColor = Color.FromArgb("#73737E")
-            });
-            if (entry.Kind != TranscriptKind.System)
-                card.Children.Add(new Label { Text = entry.Text, TextColor = Color.FromArgb("#E8E8ED"), LineBreakMode = LineBreakMode.WordWrap });
+                card.Children.Add(MessageText(entry.Text, 10, "#73737E"));
+            }
+            else
+            {
+                card.Children.Add(new Label
+                {
+                    Text = $"{entry.Speaker}  #{entry.Turn} · {entry.At:HH:mm:ss}",
+                    FontSize = 10,
+                    TextColor = Color.FromArgb("#73737E")
+                });
+                card.Children.Add(MessageText(entry.Text, 13, "#E8E8ED"));
+            }
             if (entry.ShowRemember)
             {
                 var remember = new Button { Text = entry.RememberLabel };
@@ -232,6 +239,18 @@ public partial class MainPage : ContentPage
         }
     }
 
+    /// <summary>
+    /// Message text, not the speaker line. SelectableLabel is what makes a
+    /// drag highlight the words. A plain Label cannot.
+    /// </summary>
+    private static SelectableLabel MessageText(string text, int fontSize, string color) => new SelectableLabel
+    {
+        Text = text,
+        FontSize = fontSize,
+        TextColor = Color.FromArgb(color),
+        LineBreakMode = LineBreakMode.WordWrap
+    };
+
     private void FillLog()
     {
         if (!LogPanel.IsVisible) return;
@@ -244,10 +263,50 @@ public partial class MainPage : ContentPage
         }
     }
 
+    private void ApplyLamps()
+    {
+        var presence = StatusTones.Presence(_session.Connected, _session.Activity);
+        PresenceDot.Color = Tone(presence);
+        PresenceText.Text = presence switch
+        {
+            StatusTone.Amber => "connecting",
+            StatusTone.Red => "offline",
+            _ => "here with you"
+        };
+        PresenceText.TextColor = Tone(presence);
+
+        var activity = StatusTones.Activity(_session.Activity, _session.Connected);
+        ActivityDot.Color = Tone(activity);
+
+        var micDetail = _session.MicTag.Replace("🎤 ", "", StringComparison.Ordinal).Trim();
+        PaintStage(MicDot, MicLampText, "Mic", StatusTones.Mic(_session.MicLamp, _session.MicTagLamp, _session.Activity), micDetail);
+        PaintStage(SttDot, SttLampText, "STT", StatusTones.Pipeline(_session.SttLamp, _session.Activity, "Transcribing…"), null);
+        PaintStage(LlmDot, LlmLampText, "LLM", StatusTones.Pipeline(_session.LlmLamp, _session.Activity, "Thinking…"), null);
+        PaintStage(TtsDot, TtsLampText, "TTS", StatusTones.Pipeline(_session.TtsLamp, _session.Activity, "Speaking…"), null);
+        PaintStage(ApiDot, ApiLampText, "API", StatusTones.ForStage(_session.ApiLamp), null);
+    }
+
+    private static void PaintStage(BoxView dot, Label label, string name, StatusTone tone, string? detail)
+    {
+        dot.Color = Tone(tone);
+        label.Text = string.IsNullOrEmpty(detail) ? StatusTones.Caption(name, tone) : name + " " + detail;
+        label.TextColor = tone == StatusTone.Off ? Color.FromArgb("#73737E") : Tone(tone);
+    }
+
+    private static Color Tone(StatusTone tone) => Color.FromArgb(StatusTones.Hex(tone));
+
     private void ApplyBackground()
     {
         if (_session.BackgroundPath is { } path && File.Exists(path))
-            BackgroundImageSource = ImageSource.FromFile(path);
+        {
+            SceneImage.IsVisible = true;
+            SceneImage.Aspect = Aspect.AspectFit;
+            if (SceneImage.Source is FileImageSource current && current.File == path) return;
+            SceneImage.Source = ImageSource.FromFile(path);
+            return;
+        }
+        SceneImage.Source = null;
+        SceneImage.IsVisible = false;
     }
 
     private void SyncWakeService()
@@ -262,15 +321,6 @@ public partial class MainPage : ContentPage
         else ctx.StopService(intent);
 #endif
     }
-
-    private static string Lamp(StageLamp lamp) => lamp switch
-    {
-        StageLamp.Green => "🟢",
-        StageLamp.Yellow => "🟡",
-        StageLamp.Red => "🔴",
-        StageLamp.Wait => "⏳",
-        _ => "⚫"
-    };
 
     private static void Paint(Button button, bool active)
     {
@@ -347,10 +397,15 @@ public partial class MainPage : ContentPage
     private void OnNextBg(object? sender, EventArgs e) => _session.StepBackground(1);
     private void OnRandBg(object? sender, EventArgs e) => _session.RandomBackground();
     private void OnToggleLog(object? sender, EventArgs e) { LogPanel.IsVisible = !LogPanel.IsVisible; LogToggle.Text = (LogPanel.IsVisible ? "▾" : "▸") + "  Event Log"; FillLog(); }
-    private void OnToggleHelp(object? sender, EventArgs e) => HelpPanel.IsVisible = !HelpPanel.IsVisible;
+    private void OnToggleHelp(object? sender, EventArgs e)
+    {
+        HelpPanel.IsVisible = !HelpPanel.IsVisible;
+        HelpToggle.Text = (HelpPanel.IsVisible ? "▾" : "▸") + "  Keywords & Tools";
+    }
     private void OnToggleSettings(object? sender, EventArgs e)
     {
         SettingsPanel.IsVisible = !SettingsPanel.IsVisible;
+        SettingsToggle.Text = (SettingsPanel.IsVisible ? "▾" : "▸") + "  Settings";
         if (!SettingsPanel.IsVisible) return;
         BeastHostEntry.Text = _session.BridgeHost;
         BeastPortEntry.Text = _session.BridgePort;
@@ -362,8 +417,16 @@ public partial class MainPage : ContentPage
         var error = _session.TrySaveBridge(BeastHostEntry.Text ?? "", BeastPortEntry.Text ?? "");
         BridgeSaveStatus.Text = error ?? _session.BridgeStatus;
     }
-    private void OnToggleMetrics(object? sender, EventArgs e) => MetricsPanel.IsVisible = !MetricsPanel.IsVisible;
-    private void OnToggleTuning(object? sender, EventArgs e) => TuningPanel.IsVisible = !TuningPanel.IsVisible;
+    private void OnToggleMetrics(object? sender, EventArgs e)
+    {
+        MetricsPanel.IsVisible = !MetricsPanel.IsVisible;
+        MetricsToggle.Text = (MetricsPanel.IsVisible ? "▾" : "▸") + "  Latency";
+    }
+    private void OnToggleTuning(object? sender, EventArgs e)
+    {
+        TuningPanel.IsVisible = !TuningPanel.IsVisible;
+        TuningToggle.Text = (TuningPanel.IsVisible ? "▾" : "▸") + "  Tuning";
+    }
 
     /// <summary>
     /// Page.Resources does not include styles merged on the application.

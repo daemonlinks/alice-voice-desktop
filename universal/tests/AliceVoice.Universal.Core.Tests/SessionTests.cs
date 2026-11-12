@@ -178,6 +178,20 @@ public class VoiceSessionTests
     }
 
     [Fact]
+    public async Task ApiLampIsGreenWhileConnectedAndRedWhenOffline()
+    {
+        var fx = await Fixture.Start();
+        Assert.Equal(StageLamp.Green, fx.Session.ApiLamp);
+        Assert.Equal(StatusTone.Green, StatusTones.ForStage(fx.Session.ApiLamp));
+        fx.Manager.Fail = true;
+        await fx.Session.ConnectAsync(force: true);
+        Assert.False(fx.Session.Connected);
+        Assert.Equal(StageLamp.Red, fx.Session.ApiLamp);
+        Assert.Equal("Offline", fx.Session.Activity);
+        Assert.Equal(StatusTone.Red, StatusTones.Presence(fx.Session.Connected, fx.Session.Activity));
+    }
+
+    [Fact]
     public async Task VoiceFileRoundTripsAsTheDesktopJson()
     {
         var path = Path.Combine(Path.GetTempPath(), "alice-voice-assign-" + Guid.NewGuid().ToString("N") + ".json");
@@ -245,6 +259,8 @@ public class VoiceSessionTests
         await send;
         Assert.False(fx.Session.Connected);
         Assert.Equal("Ready", fx.Session.StatusText);
+        Assert.Equal("Offline", fx.Session.Activity);
+        Assert.Equal(StageLamp.Red, fx.Session.ApiLamp);
         Assert.Contains(fx.Session.Transcript, t => t.Kind == TranscriptKind.User && t.Text.Contains("do not lose this"));
     }
 

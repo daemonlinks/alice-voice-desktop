@@ -37,16 +37,35 @@ public sealed class HermesApiFleetChat : IFleetChat, IDisposable
     private readonly HttpClient _http;
     private readonly string _baseUrl;
     private readonly string _sharedKey;
+    private readonly bool _sharedKeyExplicit;
     private readonly ConcurrentDictionary<string, ConversationHistory> _histories = new();
+
+    /// <summary>
+    /// Last reachability verdict per member. A switch used to pay the full probe timeout
+    /// every time, so a member that had gone away stalled the UI before the connect even
+    /// started (measured 2026-11-12: 2.1 s when the VPS member was down). A short cache
+    /// plus a 3 s ceiling keeps a switch responsive; a stale "reachable" costs nothing
+    /// worse than a send failing with its own real error.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, (DateTime At, bool Ok)> _reachCache = new();
+    private static readonly TimeSpan ReachCacheTtl = TimeSpan.FromSeconds(45);
 
     public HermesApiFleetChat(string baseUrl, string? sharedKey = null, HttpClient? http = null)
     {
         _baseUrl = baseUrl.TrimEnd('/');
+        _sharedKeyExplicit = !string.IsNullOrEmpty(sharedKey);
         _sharedKey = sharedKey ?? ApiKeyResolver.Resolve();
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(120) };
     }
 
     public bool HasApiKey => !string.IsNullOrEmpty(_sharedKey);
+
+    /// <summary>
+    /// The api_server to use for this member: its own host when it lives off this
+    /// host (WSL/VPS), otherwise the session's configured server.
+    /// </summary>
+    private string BaseFor(FleetMember m) =>
+        string.IsNullOrEmpty(m.BaseUrl) ? _baseUrl : m.BaseUrl!.TrimEnd('/');
 
     private ConversationHistory History(FleetMember m) => _histories.GetOrAdd(m.Name, _ => new ConversationHistory(20));
 
@@ -66,7 +85,7 @@ public sealed class HermesApiFleetChat : IFleetChat, IDisposable
 
         var body = new { model = member.Profile, messages, stream = false };
 
-        using var req = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/p/{member.Profile}/v1/chat/completions");
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"{BaseFor(member)}/p/{member.Profile}/v1/chat/completions");
         AddAuth(req, member);
         req.Content = JsonContent.Create(body);
 
@@ -100,37 +119,54 @@ public sealed class HermesApiFleetChat : IFleetChat, IDisposable
     /// <summary>Throws with the HTTP status if the member is not served / the key is rejected.</summary>
     public async Task EnsureReachableAsync(FleetMember member, CancellationToken ct = default)
     {
-        using var req = new HttpRequestMessage(HttpMethod.Get, $"{_baseUrl}/p/{member.Profile}/v1/models");
+        using var req = new HttpRequestMessage(HttpMethod.Get, $"{BaseFor(member)}/p/{member.Profile}/v1/models");
         AddAuth(req, member);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(10));
+        // 3 s, not 10: this blocks a member switch (VoiceSession.ConnectAsync), and every
+        // member answers in 5-40 ms (measured 2026-11-12). A slow host should show as
+        // offline quickly rather than freeze the UI.
+        cts.CancelAfter(TimeSpan.FromSeconds(3));
         using var resp = await _http.SendAsync(req, cts.Token);
         if (!resp.IsSuccessStatusCode)
             throw new HttpRequestException(
-                $"{member.DisplayName} not reachable at {_baseUrl} ({(int)resp.StatusCode} {resp.StatusCode}{(HasApiKey ? "" : ", no API_SERVER_KEY found")})",
+                $"{member.DisplayName} not reachable at {BaseFor(member)} ({(int)resp.StatusCode} {resp.StatusCode}{(string.IsNullOrEmpty(KeyFor(member)) ? ", no API_SERVER_KEY found" : "")})",
                 null, resp.StatusCode);
     }
 
     public async Task<bool> IsReachableAsync(FleetMember member, CancellationToken ct = default)
     {
+        if (_reachCache.TryGetValue(member.Name, out var hit) && DateTime.UtcNow - hit.At < ReachCacheTtl)
+            return hit.Ok;
+
+        bool ok;
         try
         {
             await EnsureReachableAsync(member, ct);
-            return true;
+            ok = true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             Log.Warning("Reachability check failed for {Member}: {Message}", member.Name, ex.Message);
-            return false;
+            ok = false;
         }
+
+        _reachCache[member.Name] = (DateTime.UtcNow, ok);
+        return ok;
     }
 
     private void AddAuth(HttpRequestMessage req, FleetMember member)
     {
-        var key = member.ApiKey ?? _sharedKey;
+        var key = KeyFor(member);
         if (!string.IsNullOrEmpty(key))
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
     }
+
+    /// <summary>
+    /// The key to present for this member: its explicit key, else the injected
+    /// shared key, else that profile's OWN key on the host that serves it.
+    /// </summary>
+    private string KeyFor(FleetMember member) =>
+        member.ApiKey ?? (_sharedKeyExplicit ? _sharedKey : ApiKeyResolver.Resolve(member));
 
     public void Dispose() => _http.Dispose();
 }
