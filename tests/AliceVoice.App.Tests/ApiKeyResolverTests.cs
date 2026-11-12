@@ -122,4 +122,34 @@ public class ApiKeyResolverTests
             try { Directory.Delete(home, true); } catch { }
         }
     }
+
+    [Fact]
+    public void AppOwnedKeyFileServesAHostWhoseEnvIsNotOnThisFilesystem()
+    {
+        // A second user or machine has no HKCU override and no VPS .env; the app-owned key
+        // file (%LOCALAPPDATA%\AliceVoice\api-keys.env, overridden here for the test) is the
+        // durable route to alice_arena / alice_6 keys.
+        var keys = Path.Combine(Path.GetTempPath(), "alicevoice-keys-" + Guid.NewGuid().ToString("N") + ".env");
+        File.WriteAllText(keys, "API_SERVER_KEY_ALICE_ARENA=appfilekey\n");
+
+        var fileVar = "ALICEVOICE_KEYS_FILE";
+        var memberVar = "API_SERVER_KEY_ALICE_ARENA";
+        var savedFile = Environment.GetEnvironmentVariable(fileVar);
+        var savedMember = Environment.GetEnvironmentVariable(memberVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(memberVar, null); // the machine override would win over the file
+            Environment.SetEnvironmentVariable(fileVar, keys);
+            ApiKeyResolver.ClearCache();
+
+            Assert.Equal("appfilekey", ApiKeyResolver.Resolve("alice_arena", "default", FleetRoster.VpsBaseUrl));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(memberVar, savedMember);
+            Environment.SetEnvironmentVariable(fileVar, savedFile);
+            ApiKeyResolver.ClearCache();
+            try { File.Delete(keys); } catch { }
+        }
+    }
 }
