@@ -82,7 +82,13 @@ public class AliceLocalHonchoTests
     [Fact]
     public void SearchWithoutAKeyDoesNotLeaveTheMachine()
     {
-        using var doc = JsonDocument.Parse(Run("""{"tool":"search","args":{"query":"tea"}}"""));
+        // Point the tools script at an env file that does not exist: _load_env() otherwise
+        // reads TAVILY_API_KEY out of C:\ProgramData\AliceVoice\.env (this machine's real
+        // one), which is the very key this test must run without. Arranging the
+        // precondition, not weakening the assertion (2026-11-12).
+        var noKeyEnv = Path.Combine(Path.GetTempPath(), "alicevoice-nokey-" + Guid.NewGuid().ToString("N") + ".env");
+        using var doc = JsonDocument.Parse(Run("""{"tool":"search","args":{"query":"tea"}}""",
+            new Dictionary<string, string> { ["ALICEVOICE_ENV"] = noKeyEnv }));
         Assert.Equal("no TAVILY_API_KEY configured", doc.RootElement.GetProperty("error").GetString());
     }
 
@@ -125,6 +131,11 @@ public class AliceLocalHonchoTests
 
     private static string Python()
     {
+        // The app's own resolver knows the Hermes venv (the interpreter that has
+        // faster-whisper) and REFUSES the Windows Store stub. Hardcoded POSIX paths
+        // made all five tests in this file fail on Windows with "Python was not found"
+        // (fixed 2026-11-12; the stub is what a bare `python` resolves to).
+        if (RuntimeLocator.FindPython(new AliceVoiceOptions()) is { } found) return found;
         foreach (var candidate in new[] { "/usr/bin/python3", "/usr/bin/python" })
             if (File.Exists(candidate)) return candidate;
         return "python3";

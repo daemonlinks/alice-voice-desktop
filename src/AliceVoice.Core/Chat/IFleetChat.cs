@@ -40,6 +40,16 @@ public sealed class HermesApiFleetChat : IFleetChat, IDisposable
     private readonly bool _sharedKeyExplicit;
     private readonly ConcurrentDictionary<string, ConversationHistory> _histories = new();
 
+    /// <summary>
+    /// Last reachability verdict per member. A switch used to pay the full probe timeout
+    /// every time, so a member that had gone away stalled the UI before the connect even
+    /// started (measured 2026-11-12: 2.1 s when the VPS member was down). A short cache
+    /// plus a 3 s ceiling keeps a switch responsive; a stale "reachable" costs nothing
+    /// worse than a send failing with its own real error.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, (DateTime At, bool Ok)> _reachCache = new();
+    private static readonly TimeSpan ReachCacheTtl = TimeSpan.FromSeconds(45);
+
     public HermesApiFleetChat(string baseUrl, string? sharedKey = null, HttpClient? http = null)
     {
         _baseUrl = baseUrl.TrimEnd('/');
@@ -112,7 +122,10 @@ public sealed class HermesApiFleetChat : IFleetChat, IDisposable
         using var req = new HttpRequestMessage(HttpMethod.Get, $"{BaseFor(member)}/p/{member.Profile}/v1/models");
         AddAuth(req, member);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(10));
+        // 3 s, not 10: this blocks a member switch (VoiceSession.ConnectAsync), and every
+        // member answers in 5-40 ms (measured 2026-11-12). A slow host should show as
+        // offline quickly rather than freeze the UI.
+        cts.CancelAfter(TimeSpan.FromSeconds(3));
         using var resp = await _http.SendAsync(req, cts.Token);
         if (!resp.IsSuccessStatusCode)
             throw new HttpRequestException(
@@ -122,16 +135,23 @@ public sealed class HermesApiFleetChat : IFleetChat, IDisposable
 
     public async Task<bool> IsReachableAsync(FleetMember member, CancellationToken ct = default)
     {
+        if (_reachCache.TryGetValue(member.Name, out var hit) && DateTime.UtcNow - hit.At < ReachCacheTtl)
+            return hit.Ok;
+
+        bool ok;
         try
         {
             await EnsureReachableAsync(member, ct);
-            return true;
+            ok = true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             Log.Warning("Reachability check failed for {Member}: {Message}", member.Name, ex.Message);
-            return false;
+            ok = false;
         }
+
+        _reachCache[member.Name] = (DateTime.UtcNow, ok);
+        return ok;
     }
 
     private void AddAuth(HttpRequestMessage req, FleetMember member)
