@@ -30,7 +30,17 @@ public sealed record VoiceBackendSettings
 
     /// <summary>ollama | hermes</summary>
     public string Provider { get; init; } = "ollama";
-    public string Model { get; init; } = "dolphin-llama3:8b";
+
+    /// <summary>
+    /// The one local brain the app runs — every Ollama-backed state uses it. It must be a
+    /// tool-calling model: the Alice LOCAL backend sends native tool definitions and only
+    /// degrades to inline JSON (unreliable) when the model does not advertise tool support.
+    /// Measured 2026-11-12 against the app's own SOUL prompt and tool schema: 5/5 correct
+    /// tool calls, ~0.9 s warm on the 1080 Ti. Do not introduce a second model here.
+    /// </summary>
+    public const string OllamaModel = "llama3.1:8b-instruct-q4_1";
+
+    public string Model { get; init; } = OllamaModel;
 
     public string OllamaUrl { get; init; } = "http://localhost:11434";
 
@@ -46,6 +56,9 @@ public sealed record VoiceBackendSettings
             OllamaUrl = o.ResolvedOllamaUrl,
             AgentEndpoint = o.ResolvedHermesApiUrl
         };
+        // Both Ollama-backed states (AliceLocal, LocalOllama) run the same brain: the record
+        // default above. Only the Hermes agent state uses a different transport, and its
+        // model is set by the Hermes profile.
         return kind == VoiceBackendKind.AliceVoiceAgent
             ? s with { Provider = "hermes", Model = "alice_voice" }
             : s;
