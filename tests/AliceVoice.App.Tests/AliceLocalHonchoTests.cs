@@ -125,6 +125,11 @@ public class AliceLocalHonchoTests
 
     private static string Python()
     {
+        // The app's own resolver knows the Hermes venv (the interpreter that has
+        // faster-whisper) and REFUSES the Windows Store stub. Hardcoded POSIX paths
+        // made all five tests in this file fail on Windows with "Python was not found"
+        // (fixed 2026-11-12; the stub is what a bare `python` resolves to).
+        if (RuntimeLocator.FindPython(new AliceVoiceOptions()) is { } found) return found;
         foreach (var candidate in new[] { "/usr/bin/python3", "/usr/bin/python" })
             if (File.Exists(candidate)) return candidate;
         return "python3";
