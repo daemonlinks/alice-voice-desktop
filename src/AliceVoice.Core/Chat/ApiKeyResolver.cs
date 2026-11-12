@@ -50,6 +50,11 @@ public static class ApiKeyResolver
         {
             var env = Environment.GetEnvironmentVariable($"API_SERVER_KEY_{name.ToUpperInvariant()}");
             if (!string.IsNullOrEmpty(env)) return env;
+
+            // App-owned, so the app does not depend on machine-level environment
+            // variables (item: a second user or machine had no route to the VPS keys).
+            var app = FromAppKeyFile(name);
+            if (!string.IsNullOrEmpty(app)) return app;
         }
 
         if (!string.IsNullOrWhiteSpace(profile))
@@ -91,6 +96,49 @@ public static class ApiKeyResolver
 
     private static bool IsVpsHost(string? baseUrl) =>
         string.Equals(baseUrl?.TrimEnd('/'), FleetRoster.VpsBaseUrl, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The app-owned key file: <c>%LOCALAPPDATA%\AliceVoice\api-keys.env</c>, keys named
+    /// <c>API_SERVER_KEY_&lt;MEMBER&gt;</c> exactly like the environment override, so an
+    /// operator can hand the app the key for a host whose .env is not on this filesystem
+    /// (the VPS) without setting a machine-level variable. <c>ALICEVOICE_KEYS_FILE</c>
+    /// overrides the path, for tests. The value is never logged.
+    /// </summary>
+    private static string FromAppKeyFile(string name)
+    {
+        var want = $"API_SERVER_KEY_{name.ToUpperInvariant()}=";
+        foreach (var path in AppKeyFileCandidates())
+        {
+            try
+            {
+                if (!File.Exists(path)) continue;
+                foreach (var line in File.ReadAllLines(path))
+                {
+                    if (line.StartsWith(want, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var v = line.Substring(want.Length).Trim().Trim('"', '\'');
+                        if (!string.IsNullOrEmpty(v)) return v;
+                    }
+                }
+            }
+            catch { /* ignore unreadable files */ }
+        }
+        return "";
+    }
+
+    private static IEnumerable<string> AppKeyFileCandidates()
+    {
+        var over = Environment.GetEnvironmentVariable("ALICEVOICE_KEYS_FILE");
+        if (!string.IsNullOrEmpty(over))
+        {
+            yield return over;
+            yield break;
+        }
+
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (!string.IsNullOrEmpty(local))
+            yield return Path.Combine(local, "AliceVoice", "api-keys.env");
+    }
 
     private static string Shared()
     {
