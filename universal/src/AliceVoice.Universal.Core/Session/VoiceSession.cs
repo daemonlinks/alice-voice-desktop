@@ -7,6 +7,7 @@ using AliceVoice.Core.Voice;
 using AliceVoice.Core.WakeWord;
 using AliceVoice.Universal.Audio;
 using AliceVoice.Universal.Host;
+using AliceVoice.Universal.Media;
 using AliceVoice.Universal.Updates;
 using AliceVoice.Universal.Voice;
 using AliceVoice.Universal.Wake;
@@ -82,11 +83,14 @@ public sealed class VoiceSession : IAsyncDisposable
     private DateTime _nextConversationPoll;
     private Action? _stopSpeech;
     private readonly BridgeClientSettings? _bridgeClient;
+    private readonly HashSet<string> _ignoredTools = new(StringComparer.Ordinal);
+    private bool _ownsImages;
+    private bool _turnShowedPicture;
 
     public VoiceSession(UniversalHost host, IVoiceBackendManager voice, IFleetChat chat, IVoiceProviderManager providers,
         IPcmMicrophone mic, IAppUpdater updater, ISoulGateway soul, IWakeSource wakeSource, VoiceAssignmentStore assignments,
         IAliceConversation? conversation = null, SoulReloadHub? hub = null, Func<DateTime>? clock = null, Func<DateTime>? localClock = null,
-        BridgeClientSettings? bridgeClient = null)
+        BridgeClientSettings? bridgeClient = null, ImageDisplay? images = null)
     {
         _host = host;
         _voice = voice;
@@ -100,6 +104,9 @@ public sealed class VoiceSession : IAsyncDisposable
         _conversation = conversation;
         _hub = hub;
         _bridgeClient = bridgeClient;
+        _ownsImages = images is null;
+        Images = images ?? CreateImages(host, bridgeClient, s => { AddLog(s); Touch(); }, clock);
+        Images.Changed += Touch;
         if (_conversation is not null) _conversation.Changed += () => ApplySharedSnapshot();
         _clock = clock ?? (() => DateTime.UtcNow);
         _local = localClock ?? (() => DateTime.Now);
@@ -116,6 +123,12 @@ public sealed class VoiceSession : IAsyncDisposable
 
     public event Action? Changed;
     public event Action? MeterChanged;
+
+    /// <summary>The picture overlay: the only thing an agent reply can drive on this screen.</summary>
+    public ImageDisplay Images { get; }
+
+    /// <summary>Everything in the app log, oldest first - what "Copy all" puts on the clipboard.</summary>
+    public string LogText { get { lock (_gate) return string.Join(Environment.NewLine, _logs); } }
 
     public IReadOnlyList<SessionTarget> Targets { get; }
     public string SelectedTargetId { get; private set; }
@@ -486,8 +499,8 @@ public sealed class VoiceSession : IAsyncDisposable
         Touch();
     }
 
-    public void StepBackground(int delta) { Backgrounds.Step(delta); Touch(); }
-    public void RandomBackground() { Backgrounds.RandomOther(); Touch(); }
+    public void StepBackground(int delta) { Images.ReleaseBackdrop(); Backgrounds.Step(delta); Touch(); }
+    public void RandomBackground() { Images.ReleaseBackdrop(); Backgrounds.RandomOther(); Touch(); }
 
     public void OnMicFrame(float[] pcm)
     {
@@ -500,6 +513,7 @@ public sealed class VoiceSession : IAsyncDisposable
     {
         lock (_gate) _vuLevel *= 0.85f;
         RefreshWakeMeter();
+        Images.Tick();
         var clearError = false;
         lock (_gate)
         {
@@ -534,6 +548,45 @@ public sealed class VoiceSession : IAsyncDisposable
         _voice.EventReceived -= OnVoiceEvent;
         try { await StopMicAsync(); } catch { }
         _wake.Dispose();
+        Images.Changed -= Touch;
+        if (_ownsImages) Images.Dispose();
+    }
+
+    private static ImageDisplay CreateImages(UniversalHost host, BridgeClientSettings? bridge, Action<string> log, Func<DateTime>? clock)
+    {
+        var settings = MediaSettings.Load(host.SettingsFile);
+        // Windows reads the allowed roots itself (the Beast, or a PC that has them).
+        // A phone never reads paths; it asks the Beast's Tailscale-only bridge.
+        var local = host.Kind == PlatformHostKind.Windows ? new MediaShare(settings) : null;
+        Func<string, string>? url = null;
+        if (bridge is not null) url = id => new BeastServiceUrls(bridge.Host, bridge.Port).Media(id);
+        else if (host.Remote is { } remote) url = remote.Media;
+        return new ImageDisplay(settings, local, url, log, clock);
+    }
+
+    /// <summary>
+    /// Tool-command JSON never reaches the bubble or the voice. For Hermes / fleet replies the
+    /// two allowlisted display commands run on this screen, off the turn; every other command
+    /// is ignored and logged once per name. Nothing goes back to the agent.
+    /// </summary>
+    private string ApplyDisplayCommands(string reply, bool execute)
+    {
+        var filtered = DisplayCommands.Filter(reply);
+        _turnShowedPicture = execute && filtered.Display.Count > 0;
+        foreach (var name in filtered.Ignored) NoteIgnored(name);
+        foreach (var command in filtered.Display)
+        {
+            if (execute) Images.Submit(command);
+            else NoteIgnored(command.Tool);
+        }
+        return filtered.Prose;
+    }
+
+    private void NoteIgnored(string tool)
+    {
+        bool first;
+        lock (_gate) first = _ignoredTools.Add(tool);
+        if (first) AddLog($"Ignored tool command: {ToolCrumb(tool)} (not allowlisted; logged once)");
     }
 
     private async Task ApplyPttAsync(PttAction action)
@@ -651,11 +704,12 @@ public sealed class VoiceSession : IAsyncDisposable
                 _voice.EventReceived += OnFirst;
                 try { reply = await _voice.AskAsync(text, ReplyStyle.Build(Mood, Profile), ct); }
                 finally { _voice.EventReceived -= OnFirst; }
+                reply = ApplyDisplayCommands(reply, execute: false);
             }
             else
             {
                 var member = SelectedMember ?? throw new InvalidOperationException("No fleet member selected");
-                reply = await _chat.SendAsync(member, text, ct);
+                reply = ApplyDisplayCommands(await _chat.SendAsync(member, text, ct), execute: true);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -708,7 +762,7 @@ public sealed class VoiceSession : IAsyncDisposable
                 _streamEntry.Text = reply;
                 _streamEntry.ShowRemember = true;
             }
-            else Append(TranscriptKind.Alice, target, reply, showRemember: true);
+            else Append(TranscriptKind.Alice, target, string.IsNullOrWhiteSpace(reply) && _turnShowedPicture ? "\U0001F5BC picture" : reply, showRemember: true);
             _streamTurnId = 0;
             _streamEntry = null;
         }
@@ -777,6 +831,10 @@ public sealed class VoiceSession : IAsyncDisposable
                 OperationTrail.Leave("ui.tool", tool);
                 SetActivity("Thinking…", tool == "unlisted" ? "using a tool" : "using " + tool);
                 Touch();
+                break;
+            case DisplayCommands.EventType:
+                if (evt.Payload?["tool"]?.GetValue<string>() is { } t && evt.Payload["args"] is System.Text.Json.Nodes.JsonObject a && DisplayCommands.IsAllowed(t))
+                    Images.Submit(new ToolCommand(t, a.ToJsonString()));
                 break;
             case "backend_ready":
             case "backend_switched":

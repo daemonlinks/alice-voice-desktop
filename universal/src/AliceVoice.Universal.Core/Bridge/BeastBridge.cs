@@ -8,6 +8,7 @@ using AliceVoice.Core.Stt;
 using AliceVoice.Core.Voice;
 using AliceVoice.Universal.Audio;
 using AliceVoice.Universal.Host;
+using AliceVoice.Universal.Media;
 using AliceVoice.Universal.Voice;
 using Serilog;
 
@@ -39,6 +40,8 @@ public sealed class BeastBridge : IAsyncDisposable
     private readonly string _host;
     private readonly int _port;
     private readonly SemaphoreSlim _localLock = new(1, 1);
+    private readonly MediaSettings _media;
+    private readonly MediaShare _share;
 
     private HttpListener? _listener;
     private CancellationTokenSource? _cts;
@@ -47,8 +50,11 @@ public sealed class BeastBridge : IAsyncDisposable
     private IFleetChat? _fleet;
 
     public BeastBridge(AliceVoiceOptions options, ISttClient stt, ISoulGateway soul, IPiperSynth piper, string host, int port, SoulReloadHub? hub = null,
-        Func<IVoiceBackend>? localFactory = null, Func<IFleetChat>? fleetFactory = null, SharedTranscript? transcript = null, bool allowUnsafeBind = false)
+        Func<IVoiceBackend>? localFactory = null, Func<IFleetChat>? fleetFactory = null, SharedTranscript? transcript = null, bool allowUnsafeBind = false,
+        MediaSettings? media = null)
     {
+        _media = media ?? MediaSettings.Default;
+        _share = new MediaShare(_media);
         _options = options;
         _stt = stt;
         _soul = soul;
@@ -240,6 +246,11 @@ public sealed class BeastBridge : IAsyncDisposable
             await WriteJson(ctx.Response, 200, new OkResponse(true, null));
             return;
         }
+        if (method == "GET" && path.StartsWith(MediaPrefix, StringComparison.Ordinal))
+        {
+            await ServeMedia(ctx, path[MediaPrefix.Length..], ct);
+            return;
+        }
         if (method == "GET" && path == "/v1/tts/piper/voices")
         {
             await WriteJson(ctx.Response, 200, new VoicesResponse(_piper.ListVoices().ToList()));
@@ -259,6 +270,44 @@ public sealed class BeastBridge : IAsyncDisposable
         }
 
         await WriteJson(ctx.Response, 404, new OkResponse(false, "not found"));
+    }
+
+    private const string MediaPrefix = "/v1/media/";
+
+    /// <summary>
+    /// GET /v1/media/{id}: a picture for a phone. The id is base64url of an absolute path
+    /// and grants nothing: every request is checked against the relay's share rules
+    /// (allowed roots, extension list, 40 MB cap) before a byte is read. Same Tailscale-only
+    /// socket as every other route; this adds no listener.
+    /// </summary>
+    private async Task ServeMedia(HttpListenerContext ctx, string id, CancellationToken ct)
+    {
+        if (!_media.Enabled) { await WriteJson(ctx.Response, 404, new OkResponse(false, "media display is off")); return; }
+        if (!MediaShare.TryFromId(id, out var path)) { await WriteJson(ctx.Response, 400, new OkResponse(false, "bad args: id")); return; }
+        var check = _share.Validate(path);
+        if (!check.Ok)
+        {
+            var status = check.Error switch
+            {
+                MediaShare.PathNotAllowed => 403,
+                MediaShare.UnsupportedType => 415,
+                MediaShare.TooLarge => 413,
+                _ => 404
+            };
+            OperationTrail.Leave("bridge.media.refused", check.Error ?? "");
+            await WriteJson(ctx.Response, status, new OkResponse(false, check.Error));
+            return;
+        }
+        await using var file = new FileStream(check.FullPath!, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, useAsync: true);
+        if (file.Length > MediaSettings.CeilingBytes) { await WriteJson(ctx.Response, 413, new OkResponse(false, MediaShare.TooLarge)); return; }
+        ctx.Response.StatusCode = 200;
+        ctx.Response.ContentType = check.ContentType ?? "application/octet-stream";
+        ctx.Response.ContentLength64 = file.Length;
+        ctx.Response.Headers["Cache-Control"] = "no-store";
+        ctx.Response.Headers["X-Content-Type-Options"] = "nosniff";
+        await file.CopyToAsync(ctx.Response.OutputStream, ct);
+        ctx.Response.Close();
+        OperationTrail.Leave("bridge.media.served", "bytes=" + file.Length);
     }
 
     private async Task Ask(HttpListenerContext ctx, CancellationToken ct)

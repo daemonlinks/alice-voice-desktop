@@ -211,15 +211,15 @@ public class ToolCallTests
     }
 
     [Fact]
-    public async Task UnknownToolDoesNotRunAndMalformedJsonIsShown()
+    public async Task UnknownToolDoesNotRunAndMalformedJsonIsNotSpoken()
     {
         var ran = false;
         var backend = Backend(new ScriptedOllama(_ => Content("I will search {\"tool\": \"honcho_search\", \"args\": {")));
         backend.RunTool = (_, _, _) => { ran = true; return Task.FromResult("{}"); };
         var reply = await backend.AskAsync("hi");
         Assert.False(ran);
-        Assert.Contains("honcho_search", reply);
-        Assert.Contains("{", reply);
+        // App U rich tools: a half-written tool command is cut, never shown or spoken.
+        Assert.Equal("I will search", reply);
     }
 
     [Fact]

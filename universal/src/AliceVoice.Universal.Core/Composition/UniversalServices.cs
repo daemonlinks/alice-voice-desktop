@@ -8,6 +8,7 @@ using AliceVoice.Core.Voice;
 using AliceVoice.Universal.Audio;
 using AliceVoice.Universal.Bridge;
 using AliceVoice.Universal.Host;
+using AliceVoice.Universal.Media;
 using AliceVoice.Universal.Voice;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -74,7 +75,8 @@ public static class UniversalServices
                 sp.GetRequiredService<SoulReloadHub>(),
                 () => sp.GetServices<IVoiceBackend>().First(b => b is RecordingAliceLocalBackend),
                 transcript: sp.GetRequiredService<SharedTranscript>(),
-                allowUnsafeBind: host.AllowUnsafeBridgeBind));
+                allowUnsafeBind: host.AllowUnsafeBridgeBind,
+                media: MediaSettings.Load(host.SettingsFile)));
         }
     }
 

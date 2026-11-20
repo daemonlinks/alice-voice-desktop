@@ -23,6 +23,8 @@ public sealed record BeastServiceUrls(string Host, int BridgePort)
     public string FleetReset => Base + "/v1/fleet/reset";
     public string Piper => Base + "/v1/tts/piper";
     public string PiperVoices => Base + "/v1/tts/piper/voices";
+    /// <summary>A picture served under the share rules. <paramref name="id"/> comes from <see cref="AliceVoice.Universal.Media.MediaShare.ToId"/>.</summary>
+    public string Media(string id) => Base + "/v1/media/" + id;
 
     /// <summary>Hostname or IP. A scheme or port on the input is stripped; service ports stay the well-known ones.</summary>
     public static string HostOnly(string beast)

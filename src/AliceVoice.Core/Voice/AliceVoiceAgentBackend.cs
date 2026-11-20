@@ -62,15 +62,22 @@ public sealed class AliceVoiceAgentBackend : IVoiceBackend
         return Task.CompletedTask;
     }
 
-    /// <summary>Send one turn to the alice_voice agent. Raises reply_text exactly once.</summary>
+    /// <summary>
+    /// Send one turn to the alice_voice agent. Raises reply_text exactly once, with any
+    /// tool-command JSON removed. Allowlisted display commands are raised as
+    /// <c>gui_command</c> events first; nothing is sent back to the agent.
+    /// </summary>
     public async Task<string> AskAsync(string prompt, AskOptions? options = null, CancellationToken ct = default)
     {
         await _lock.WaitAsync(ct);
         try
         {
-            var reply = await _chat.SendAsync(Member, prompt, ct);
-            EventReceived?.Invoke(new BackendEvent("reply_text", reply));
-            return reply;
+            var raw = await _chat.SendAsync(Member, prompt, ct);
+            var filtered = DisplayCommands.Filter(raw);
+            foreach (var command in filtered.Display) EventReceived?.Invoke(DisplayCommands.ToEvent(command));
+            foreach (var name in filtered.Ignored) Log.Information("Ignored tool command from the agent: {Tool}", name);
+            EventReceived?.Invoke(new BackendEvent("reply_text", filtered.Prose));
+            return filtered.Prose;
         }
         finally { _lock.Release(); }
     }
