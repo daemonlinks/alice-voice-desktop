@@ -51,6 +51,66 @@ public class VoiceSessionTests
     }
 
     [Fact]
+    public async Task FleetPictureCommandIsShownNeverSpokenAndOtherToolsAreLoggedOnce()
+    {
+        var root = Directory.CreateTempSubdirectory("av-sess-").FullName;
+        var png = Path.Combine(root, "a.png");
+        File.WriteAllBytes(png, MediaTests.Png());
+        var settings = new AliceVoice.Universal.Media.MediaSettings { Roots = new[] { root } };
+        using var images = new AliceVoice.Universal.Media.ImageDisplay(settings, new AliceVoice.Universal.Media.MediaShare(settings), null, _ => { });
+        var fx = await Fixture.Start(images: images);
+        await fx.Session.SelectTargetAsync("alice_voice");
+        var show = "{\"tool\":\"gui_show_image\",\"args\":{\"src\":" + System.Text.Json.JsonSerializer.Serialize(png) + ",\"mode\":\"stage\"}}";
+        fx.Chat.Reply = "Here you go. " + show + " {\"tool\":\"gui_mood\",\"args\":{\"mood\":\"sultry\"}}";
+        await fx.Session.SendTextAsync("show me");
+        fx.Chat.Reply = "Again. {\"tool\":\"gui_mood\",\"args\":{}}";
+        await fx.Session.SendTextAsync("again");
+        await images.WhenIdle();
+
+        Assert.NotNull(images.State.Current);
+        Assert.DoesNotContain(fx.Speech.Spoken, s => s.Contains('{') || s.Contains("tool"));
+        Assert.Contains(fx.Speech.Spoken, s => s.EndsWith("Here you go."));
+        Assert.DoesNotContain(fx.Session.Transcript, t => t.Text.Contains("gui_"));
+        Assert.Single(fx.Session.Logs, l => l.Contains("Ignored tool command") && l.Contains("gui_mood"));
+        Assert.Equal("playful", fx.Session.Mood);
+        Directory.Delete(root, true);
+    }
+
+    [Fact]
+    public async Task PictureOnlyReplyShowsAPlaceholderAndSpeaksNothing()
+    {
+        using var images = new AliceVoice.Universal.Media.ImageDisplay(new AliceVoice.Universal.Media.MediaSettings(), null, null, _ => { });
+        var fx = await Fixture.Start(images: images);
+        await fx.Session.SelectTargetAsync("alice_voice");
+        var before = fx.Speech.Spoken.Count;
+        fx.Chat.Reply = "{\"tool\":\"gui_show_image\",\"args\":{\"src\":\"/nowhere/a.png\"}}";
+        await fx.Session.SendTextAsync("show me");
+        Assert.Equal(before, fx.Speech.Spoken.Count);
+        Assert.Contains(fx.Session.Transcript, t => t.Text.Contains("picture"));
+    }
+
+    [Fact]
+    public async Task LocalAliceToolJsonIsStrippedButNotRun()
+    {
+        using var images = new AliceVoice.Universal.Media.ImageDisplay(new AliceVoice.Universal.Media.MediaSettings(), null, null, _ => { });
+        var fx = await Fixture.Start(images: images);
+        fx.Manager.Reply = "Hi {\"tool\":\"gui_show_image\",\"args\":{\"src\":\"/x/a.png\"}}";
+        await fx.Session.SendTextAsync("hello");
+        await images.WhenIdle();
+        Assert.Null(images.State.Current);
+        Assert.DoesNotContain(fx.Speech.Spoken, s => s.Contains('{'));
+    }
+
+    [Fact]
+    public async Task LogTextIsEveryLogLineForCopyAll()
+    {
+        var fx = await Fixture.Start();
+        await fx.Session.SendTextAsync("hello");
+        Assert.NotEmpty(fx.Session.Logs);
+        Assert.Equal(string.Join(Environment.NewLine, fx.Session.Logs), fx.Session.LogText);
+    }
+
+    [Fact]
     public async Task FleetTurnDoesNotSendStyleAndDoesNotUseTheLocalBackend()
     {
         var fx = await Fixture.Start();
@@ -342,7 +402,7 @@ public class VoiceSessionTests
         public required MutableClock Clock { get; init; }
         public SharedTranscript? Conversation { get; init; }
 
-        public static async Task<Fixture> Start(bool wake = true, PlatformHostKind kind = PlatformHostKind.Windows, bool shared = false, BridgeClientSettings? bridge = null)
+        public static async Task<Fixture> Start(bool wake = true, PlatformHostKind kind = PlatformHostKind.Windows, bool shared = false, BridgeClientSettings? bridge = null, AliceVoice.Universal.Media.ImageDisplay? images = null)
         {
             var clock = new MutableClock { Utc = new DateTime(2026, 11, 4, 12, 0, 0, DateTimeKind.Utc) };
             var manager = new FakeManager();
@@ -358,7 +418,7 @@ public class VoiceSessionTests
             var host = new UniversalHost(kind, new AliceVoiceOptions(), Path.GetTempPath(), Path.Combine(Path.GetTempPath(), "no-such-assignments.json"), Path.GetTempPath(), null, null, null);
             var conversation = shared ? new SharedTranscript() : null;
             var session = new VoiceSession(host, manager, chat, speech, new FakeMic(), updater, new FakeSoul(), new StaticWakeSource(wakeCtrl),
-                new VoiceAssignmentStore(host.AssignmentPath), conversation, hub: null, clock: () => clock.Utc, localClock: () => clock.Utc, bridgeClient: bridge);
+                new VoiceAssignmentStore(host.AssignmentPath), conversation, hub: null, clock: () => clock.Utc, localClock: () => clock.Utc, bridgeClient: bridge, images: images);
             session.SetMood("playful");
             session.SetProfile("quick");
             await session.InitializeAsync();
@@ -454,10 +514,11 @@ public class VoiceSessionTests
     {
         public bool HasApiKey { get; set; } = true;
         public List<string> Sent { get; } = new();
+        public string Reply { get; set; } = "fleet-hi";
         public Task<string> SendAsync(FleetMember member, string message, CancellationToken ct = default)
         {
             Sent.Add(member.Name + ":" + message);
-            return Task.FromResult("fleet-hi");
+            return Task.FromResult(Reply);
         }
         public Task<bool> IsReachableAsync(FleetMember member, CancellationToken ct = default) => Task.FromResult(true);
         public void ResetConversation(FleetMember? member = null) { }

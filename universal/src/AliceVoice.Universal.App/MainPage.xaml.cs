@@ -2,6 +2,7 @@ using AliceVoice.Core.Logging;
 using AliceVoice.Core.Voice;
 using AliceVoice.Universal.Audio;
 using AliceVoice.Universal.Host;
+using AliceVoice.Universal.Media;
 using AliceVoice.Universal.Session;
 using AliceVoice.Universal.Voice;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,6 +19,8 @@ public partial class MainPage : ContentPage
     private bool _rendering;
     private bool _sawPress;
     private bool _wakeServiceOn;
+    private int _overlayVersion = -1;
+    private string? _logShown;
 
     public MainPage(VoiceSession session, IServiceProvider services)
     {
@@ -80,14 +83,14 @@ public partial class MainPage : ContentPage
         _rendering = true;
         try
         {
-            BrandBadge.Text = $"v{_session.Version} · yours";
+            VersionLine.Text = $"App U v{_session.Version}";
             ApplyLamps();
             ActivityLine.Text = _session.Activity;
             var stageNote = string.IsNullOrEmpty(_session.StageError) ? "" : _session.StageError;
             ActivityDetail.Text = string.IsNullOrEmpty(stageNote)
                 ? _session.ActivityDetail
                 : string.IsNullOrEmpty(_session.ActivityDetail) ? stageNote : _session.ActivityDetail + " · " + stageNote;
-            StatusLine.Text = $"Agent: {_session.AgentLabel} · {_session.BackendLabel} · {_session.ProviderLabel} · {_session.VoiceLabel} · {_session.ConnectionLabel}";
+            AgentLine.Text = $"Agent {_session.AgentLabel} · Voice {_session.ProviderLabel} · {_session.VoiceLabel}";
             StatusText.Text = _session.StatusText;
             UpdateBanner.IsVisible = !string.IsNullOrEmpty(_session.UpdateBanner);
             UpdateBanner.Text = _session.UpdateBanner ?? "";
@@ -106,7 +109,8 @@ public partial class MainPage : ContentPage
             ModeWake.IsEnabled = _session.WakeAvailable;
             TextRow.IsVisible = _session.Mode == "text";
             WakeRow.IsVisible = _session.Mode == "wake";
-            PttRow.IsVisible = _session.Mode is "ptt" or "wake";
+            TalkButton.IsVisible = _session.Mode is "ptt" or "wake";
+            MeterRow.IsVisible = _session.Mode is "ptt" or "wake";
             SoulEditor.IsVisible = _session.Mode == "soul";
             TranscriptScroll.IsVisible = _session.Mode != "soul";
             if (_session.Mode == "soul" && SoulText.Text != _session.SoulText) SoulText.Text = _session.SoulText;
@@ -124,6 +128,8 @@ public partial class MainPage : ContentPage
             var styleOn = _session.StyleEnabled;
             foreach (var b in new[] { MoodNatural, MoodComfort, MoodPlayful, MoodFlirty, MoodFocused, ProfQuick, ProfNatural, ProfFull })
                 b.IsEnabled = styleOn;
+            // Mood and length only tune Alice LOCAL; hide them where they do nothing.
+            StyleSection.IsVisible = styleOn;
             Paint(ProfQuick, _session.Profile == "quick");
             Paint(ProfNatural, _session.Profile == "natural");
             Paint(ProfFull, _session.Profile == "full");
@@ -134,8 +140,6 @@ public partial class MainPage : ContentPage
             SettingsModel.Text = _session.SettingsLine;
             BridgeEditor.IsVisible = _session.ShowBridgeEditor;
             FooterAuth.Text = _session.FooterAuth;
-            LlmMode.Text = _session.LlmMode;
-            WsDisplay.Text = _session.WsDisplay;
             MetricsLine.Text = $"E2E {_session.Latency.TotalText}   STT {_session.Latency.SttText}   LLM {_session.Latency.LlmText}   TTFT {_session.Latency.TtftText}   TTS {_session.Latency.TtsText}";
             MetricsSummary.Text = _session.Latency.Summary;
             MetricsTable.Text = _session.Latency.Table;
@@ -143,6 +147,8 @@ public partial class MainPage : ContentPage
             FillTranscript();
             FillLog();
             ApplyBackground();
+            ApplyOverlay();
+            MediaLine.Text = MediaSummary(_session.Images.Settings);
             SyncWakeService();
         }
         finally { _rendering = false; }
@@ -251,16 +257,80 @@ public partial class MainPage : ContentPage
         LineBreakMode = LineBreakMode.WordWrap
     };
 
+    /// <summary>The bottom log: one selectable label, repainted only when a line arrives.</summary>
     private void FillLog()
     {
-        if (!LogPanel.IsVisible) return;
-        LogPanel.Children.Clear();
-        foreach (var line in _session.Logs.TakeLast(80))
+        var logs = _session.Logs;
+        var tail = string.Join(Environment.NewLine, logs.Skip(Math.Max(0, logs.Count - 200)));
+        if (tail == _logShown) return;
+        _logShown = tail;
+        // Style comes from the application dictionary; the page indexer cannot see it.
+        if (LogLabel.Style is null && FindStyle("Dim") is { } dim) LogLabel.Style = dim;
+        LogLabel.Text = tail;
+        _ = LogScroll.ScrollToAsync(0, double.MaxValue, false);
+    }
+
+    private async void OnCopyLog(object? sender, EventArgs e) => await GuardUi(nameof(OnCopyLog), async () =>
+    {
+        var text = _session.LogText;
+        await Clipboard.Default.SetTextAsync(text);
+        var lines = string.IsNullOrEmpty(text) ? 0 : text.Split('\n').Length;
+        CopyStatus.Text = $"Copied {lines} lines";
+    });
+
+    /// <summary>
+    /// Paints the agent's picture. Stage sits centred over a dimmed page, card sits in a
+    /// corner and leaves the conversation usable, backdrop takes the scene's place.
+    /// Rendering is logged locally only; nothing is sent back to the agent.
+    /// </summary>
+    private void ApplyOverlay()
+    {
+        var state = _session.Images.State;
+        if (state.Version == _overlayVersion) return;
+        _overlayVersion = state.Version;
+        var current = state.Current;
+        StageLayer.IsVisible = current?.Mode == OverlayMode.Stage;
+        CardLayer.IsVisible = current?.Mode == OverlayMode.Card;
+        if (current is not null)
         {
-            var label = new Label { Text = line };
-            if (FindStyle("Dim") is { } dim) label.Style = dim;
-            LogPanel.Children.Add(label);
+            var image = current.Mode == OverlayMode.Stage ? StageImage : CardImage;
+            var caption = current.Mode == OverlayMode.Stage ? StageCaption : CardCaption;
+            var bytes = current.Bytes;
+            image.Source = ImageSource.FromStream(() => new MemoryStream(bytes));
+            caption.Text = current.Caption;
+            caption.IsVisible = !string.IsNullOrEmpty(current.Caption);
+            _session.Images.NoteRendered(current.Id, ok: true);
         }
+        else
+        {
+            StageImage.Source = null;
+            CardImage.Source = null;
+        }
+        if (state.Backdrop is { } backdrop)
+        {
+            var bytes = backdrop.Bytes;
+            BackdropImage.Source = ImageSource.FromStream(() => new MemoryStream(bytes));
+            BackdropImage.IsVisible = true;
+            SceneImage.IsVisible = false;
+            _session.Images.NoteRendered(backdrop.Id, ok: true);
+        }
+        else
+        {
+            BackdropImage.Source = null;
+            BackdropImage.IsVisible = false;
+        }
+    }
+
+    private static string MediaSummary(MediaSettings s) =>
+        !s.Enabled ? "Agent pictures: off"
+        : $"Agent pictures: on · {(s.AllowHttps ? "allowed folders + https" : "allowed folders only")} · up to {s.MaxBytes / (1024 * 1024)} MB · {s.DefaultDurationS:0.#} s when not kept";
+
+    private void OnClosePicture(object? sender, EventArgs e) => _session.Images.CloseByUser();
+
+    private void OnToggleOptions(object? sender, EventArgs e)
+    {
+        OptionsPanel.IsVisible = !OptionsPanel.IsVisible;
+        OptionsToggle.Text = OptionsPanel.IsVisible ? "Options ▾" : "Options ▸";
     }
 
     private void ApplyLamps()
@@ -269,9 +339,9 @@ public partial class MainPage : ContentPage
         PresenceDot.Color = Tone(presence);
         PresenceText.Text = presence switch
         {
-            StatusTone.Amber => "connecting",
-            StatusTone.Red => "offline",
-            _ => "here with you"
+            StatusTone.Amber => "Connecting",
+            StatusTone.Red => "Offline",
+            _ => "Connected"
         };
         PresenceText.TextColor = Tone(presence);
 
@@ -280,10 +350,6 @@ public partial class MainPage : ContentPage
 
         var micDetail = _session.MicTag.Replace("🎤 ", "", StringComparison.Ordinal).Trim();
         PaintStage(MicDot, MicLampText, "Mic", StatusTones.Mic(_session.MicLamp, _session.MicTagLamp, _session.Activity), micDetail);
-        PaintStage(SttDot, SttLampText, "STT", StatusTones.Pipeline(_session.SttLamp, _session.Activity, "Transcribing…"), null);
-        PaintStage(LlmDot, LlmLampText, "LLM", StatusTones.Pipeline(_session.LlmLamp, _session.Activity, "Thinking…"), null);
-        PaintStage(TtsDot, TtsLampText, "TTS", StatusTones.Pipeline(_session.TtsLamp, _session.Activity, "Speaking…"), null);
-        PaintStage(ApiDot, ApiLampText, "API", StatusTones.ForStage(_session.ApiLamp), null);
     }
 
     private static void PaintStage(BoxView dot, Label label, string name, StatusTone tone, string? detail)
@@ -299,7 +365,7 @@ public partial class MainPage : ContentPage
     {
         if (_session.BackgroundPath is { } path && File.Exists(path))
         {
-            SceneImage.IsVisible = true;
+            SceneImage.IsVisible = _session.Images.State.Backdrop is null;
             SceneImage.Aspect = Aspect.AspectFit;
             if (SceneImage.Source is FileImageSource current && current.File == path) return;
             SceneImage.Source = ImageSource.FromFile(path);
@@ -396,7 +462,6 @@ public partial class MainPage : ContentPage
     private void OnPrevBg(object? sender, EventArgs e) => _session.StepBackground(-1);
     private void OnNextBg(object? sender, EventArgs e) => _session.StepBackground(1);
     private void OnRandBg(object? sender, EventArgs e) => _session.RandomBackground();
-    private void OnToggleLog(object? sender, EventArgs e) { LogPanel.IsVisible = !LogPanel.IsVisible; LogToggle.Text = (LogPanel.IsVisible ? "▾" : "▸") + "  Event Log"; FillLog(); }
     private void OnToggleHelp(object? sender, EventArgs e)
     {
         HelpPanel.IsVisible = !HelpPanel.IsVisible;
@@ -421,11 +486,6 @@ public partial class MainPage : ContentPage
     {
         MetricsPanel.IsVisible = !MetricsPanel.IsVisible;
         MetricsToggle.Text = (MetricsPanel.IsVisible ? "▾" : "▸") + "  Latency";
-    }
-    private void OnToggleTuning(object? sender, EventArgs e)
-    {
-        TuningPanel.IsVisible = !TuningPanel.IsVisible;
-        TuningToggle.Text = (TuningPanel.IsVisible ? "▾" : "▸") + "  Tuning";
     }
 
     /// <summary>

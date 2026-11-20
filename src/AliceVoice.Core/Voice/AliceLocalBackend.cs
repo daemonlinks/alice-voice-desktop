@@ -167,7 +167,8 @@ public sealed class AliceLocalBackend : IVoiceBackend
                     calls.Add(new OllamaToolCall(inlineTool, inlineArgs));
                 if (calls.Count == 0)
                 {
-                    var spoken = completion.Content;
+                    // Final guard: a cut-off tool call never reaches the bubble or the voice.
+                    var spoken = ToolCommandParser.StripForSpeech(completion.Content);
                     _history.AddTurn(prompt, spoken);
                     EventReceived?.Invoke(new BackendEvent("reply_text", spoken));
                     return spoken;
@@ -252,70 +253,9 @@ public sealed class AliceLocalBackend : IVoiceBackend
     /// text can be shown instead.
     /// </summary>
     internal static bool TryParseToolCall(string reply, out string tool, out string argsJson)
-    {
-        tool = "";
-        argsJson = "{}";
-        if (string.IsNullOrWhiteSpace(reply)) return false;
-        for (var i = 0; i < reply.Length; i++)
-        {
-            if (reply[i] != '{') continue;
-            if (!TrySliceJson(reply, i, out var slice)) continue;
-            try
-            {
-                using var doc = JsonDocument.Parse(slice);
-                if (doc.RootElement.ValueKind != JsonValueKind.Object) continue;
-                if (!doc.RootElement.TryGetProperty("tool", out var t) || t.ValueKind != JsonValueKind.String) continue;
-                var name = t.GetString() ?? "";
-                if (name.Length == 0) continue;
-                tool = name;
-                argsJson = doc.RootElement.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object ? a.GetRawText() : "{}";
-                return true;
-            }
-            catch (JsonException) { /* a later object may be the call */ }
-            i += Math.Max(0, slice.Length - 1);
-        }
-        return false;
-    }
+        => ToolCommandParser.TryParseFirst(reply, out tool, out argsJson);
 
-    internal static bool HoldsToolCall(string text)
-    {
-        if (string.IsNullOrEmpty(text)) return false;
-        var trimmed = text.TrimStart();
-        if (trimmed.StartsWith('{') || trimmed.StartsWith("```")) return true;
-        var brace = text.IndexOf('{');
-        return brace >= 0 && text.IndexOf("\"tool\"", brace, StringComparison.Ordinal) >= 0;
-    }
-
-    private static bool TrySliceJson(string text, int start, out string json)
-    {
-        var depth = 0;
-        var inString = false;
-        var escape = false;
-        for (var i = start; i < text.Length; i++)
-        {
-            var c = text[i];
-            if (inString)
-            {
-                if (escape) escape = false;
-                else if (c == '\\') escape = true;
-                else if (c == '"') inString = false;
-                continue;
-            }
-            if (c == '"') { inString = true; continue; }
-            if (c == '{') depth++;
-            else if (c == '}')
-            {
-                depth--;
-                if (depth == 0)
-                {
-                    json = text[start..(i + 1)];
-                    return true;
-                }
-            }
-        }
-        json = "";
-        return false;
-    }
+    internal static bool HoldsToolCall(string text) => ToolCommandParser.HoldsToolCall(text);
 
     private async Task<OllamaCompletion> CompleteAsync(List<ChatMessage> messages, int? maxTokens, Action<string>? onDelta, CancellationToken ct)
     {

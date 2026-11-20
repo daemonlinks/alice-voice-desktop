@@ -3,9 +3,11 @@ namespace AliceVoice.Core.Voice;
 /// <summary>
 /// A text event from a backend: "reply_partial" (streaming text so far),
 /// "reply_text" (final reply, raised exactly once per turn), "backend_ready",
-/// "reset_ack", "model_info", "tool_call", "error".
+/// "reset_ack", "model_info", "tool_call", "error", and "gui_command" (an allowlisted
+/// display command lifted out of a reply; <see cref="Payload"/> carries the tool and its args).
+/// <see cref="Payload"/> is optional, so every existing two-argument caller is unchanged.
 /// </summary>
-public sealed record BackendEvent(string Type, string? Text);
+public sealed record BackendEvent(string Type, string? Text, System.Text.Json.Nodes.JsonObject? Payload = null);
 
 /// <summary>Per-turn generation options (response profile + mood).</summary>
 public sealed record AskOptions
