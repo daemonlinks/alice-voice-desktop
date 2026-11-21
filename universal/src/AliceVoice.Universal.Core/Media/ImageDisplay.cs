@@ -45,6 +45,9 @@ public sealed class ImageDisplay : IDisposable
     /// <summary>Completes when the most recent load has finished (tests, and a clean shutdown).</summary>
     public Task WhenIdle() { lock (_gate) return _pending; }
 
+    /// <summary>The share rules this display applies, when it has a local share (Windows). Null on a phone, which asks the Beast.</summary>
+    public MediaShare? Share => _localShare;
+
     /// <summary>Run one allowlisted command. Never throws, never blocks on I/O.</summary>
     public void Submit(ToolCommand command)
     {
@@ -91,7 +94,9 @@ public sealed class ImageDisplay : IDisposable
     private void Show(string argsJson)
     {
         var args = Parse(argsJson);
-        var src = ReadString(args, "src")?.Trim();
+        // "src" is the relay's name for it; "file" is how the local leg names a picture, and the
+        // web page accepts both. Either way it is one string that goes through the same rules.
+        var src = (ReadString(args, "src") ?? ReadString(args, "file"))?.Trim();
         if (string.IsNullOrEmpty(src)) { _log("Picture ignored: bad args: src"); return; }
         var modeText = (ReadString(args, "mode") ?? "stage").Trim().ToLowerInvariant();
         OverlayMode mode;
@@ -158,7 +163,10 @@ public sealed class ImageDisplay : IDisposable
 
         if (_localShare is not null)
         {
-            var check = _localShare.Validate(src);
+            // A bare name is how local-me asks for a picture: she can name one, she cannot be
+            // expected to hand over an absolute path. The roots, type allow-list and size cap
+            // still apply, and an ambiguous name is refused rather than guessed at.
+            var check = Path.IsPathFullyQualified(src) ? _localShare.Validate(src) : _localShare.ResolveName(src);
             if (check.Ok)
             {
                 if (!_settings.AllowedKinds.Contains(check.Kind)) return (null, check.Kind, "", Unsupported(check.Kind));

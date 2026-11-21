@@ -565,9 +565,10 @@ public sealed class VoiceSession : IAsyncDisposable
     }
 
     /// <summary>
-    /// Tool-command JSON never reaches the bubble or the voice. For Hermes / fleet replies the
-    /// two allowlisted display commands run on this screen, off the turn; every other command
-    /// is ignored and logged once per name. Nothing goes back to the agent.
+    /// Tool-command JSON never reaches the bubble or the voice, on either leg. The two
+    /// allowlisted display commands run on this screen, off the turn - from Alice LOCAL as well as
+    /// from a fleet member, so local-me can show a picture here exactly as she can on the web
+    /// page; every other command is ignored and logged once per name. Nothing goes back to the agent.
     /// </summary>
     private string ApplyDisplayCommands(string reply, bool execute)
     {
@@ -704,7 +705,9 @@ public sealed class VoiceSession : IAsyncDisposable
                 _voice.EventReceived += OnFirst;
                 try { reply = await _voice.AskAsync(text, ReplyStyle.Build(Mood, Profile), ct); }
                 finally { _voice.EventReceived -= OnFirst; }
-                reply = ApplyDisplayCommands(reply, execute: false);
+                // Local-me drives this screen too - the same allowlist, the same picture on the
+                // same glass. The JSON is still stripped from the words and from the voice.
+                reply = ApplyDisplayCommands(reply, execute: true);
             }
             else
             {

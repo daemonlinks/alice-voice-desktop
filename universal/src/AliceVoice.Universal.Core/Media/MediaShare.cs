@@ -23,6 +23,9 @@ public sealed class MediaShare
     public const string UnsupportedType = "unsupported type";
     public const string TooLarge = "too large";
 
+    /// <summary>Only from <see cref="ResolveName"/>: a name matching more than one file is refused, never guessed at.</summary>
+    public const string AmbiguousName = "that name matches more than one file";
+
     private static readonly Dictionary<string, (MediaKind Kind, string Type)> Types = new(StringComparer.OrdinalIgnoreCase)
     {
         [".png"] = (MediaKind.Image, "image/png"),
@@ -94,6 +97,102 @@ public sealed class MediaShare
         if (!TryKindOf(full, out var kind, out var type)) return MediaCheck.Fail(UnsupportedType);
         if (info.Length > _maxBytes) return MediaCheck.Fail(TooLarge);
         return new MediaCheck(true, null, full, info.Length, kind, type);
+    }
+
+    /// <summary>
+    /// Up to <paramref name="n"/> showable names (filename without extension), first root first,
+    /// sorted within a root and de-duplicated. This mirrors the web page's
+    /// <c>_picture_names</c> exactly, so a local model is offered the same names in both
+    /// products - and <see cref="ResolveName"/> turns one back into a file.
+    /// </summary>
+    public IReadOnlyList<string> Catalogue(int n = 12)
+    {
+        var cap = Math.Clamp(n, 1, 40);
+        var names = new List<string>(cap);
+        foreach (var root in _roots)
+        {
+            IEnumerable<string> files;
+            try { files = Directory.EnumerateFiles(root, "*", SearchOption.TopDirectoryOnly); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+            var byName = _cmp == StringComparison.OrdinalIgnoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            foreach (var file in files.OrderBy(f => Path.GetFileName(f), byName))
+            {
+                if (!TryKindOf(file, out _, out _)) continue;
+                var stem = Path.GetFileNameWithoutExtension(file);
+                if (stem.Length == 0 || names.Contains(stem, StringComparer.OrdinalIgnoreCase)) continue;
+                names.Add(stem);
+                if (names.Count >= cap) return names;
+            }
+        }
+        return names;
+    }
+
+    /// <summary>The web page's hint, word for word, so a refusal reads the same in both products.</summary>
+    public string CatalogueHint(int n = 8)
+    {
+        var names = Catalogue(n);
+        return names.Count == 0 ? "no pictures found in the allowed folders" : "name one of these: " + string.Join(", ", names);
+    }
+
+    /// <summary>
+    /// Resolve a bare picture name to a file under the allowed roots. Alice LOCAL can name a
+    /// picture but cannot be expected to produce an absolute path, which is the local leg's way in -
+    /// the web page's <c>gui_list_pictures</c> names work the same way. The extension is optional,
+    /// the scan is capped by depth, a name matching more than one file is refused rather than
+    /// guessed at, and the winner still goes through <see cref="Validate"/> so the roots, the type
+    /// allow-list and the size cap all still apply.
+    /// </summary>
+    public MediaCheck ResolveName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return MediaCheck.Fail(NotAFile);
+        var wanted = name.Trim();
+        if (wanted.IndexOf('\0') >= 0 || wanted.IndexOfAny(new[] { '/', '\\' }) >= 0) return MediaCheck.Fail(PathNotAllowed);
+        if (wanted is "." or "..") return MediaCheck.Fail(PathNotAllowed);
+
+        var hasExt = Types.ContainsKey(Path.GetExtension(wanted));
+        var stem = hasExt ? Path.GetFileNameWithoutExtension(wanted) : wanted;
+        if (stem.Length == 0) return MediaCheck.Fail(NotAFile);
+
+        string? found = null;
+        foreach (var root in _roots)
+        {
+            foreach (var dir in Walk(root, MaxNameSearchDepth))
+            {
+                IEnumerable<string> files;
+                try { files = Directory.EnumerateFiles(dir); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+                foreach (var file in files)
+                {
+                    var fileName = Path.GetFileName(file);
+                    var match = hasExt
+                        ? string.Equals(fileName, wanted, _cmp)
+                        : string.Equals(Path.GetFileNameWithoutExtension(fileName), stem, _cmp);
+                    if (!match) continue;
+                    if (found is not null) return MediaCheck.Fail(AmbiguousName);
+                    found = file;
+                }
+            }
+        }
+        return found is null ? MediaCheck.Fail(NotAFile) : Validate(found);
+    }
+
+    /// <summary>A picture catalogue lives at or near the top of a root: a full recursive scan of a big share would be a stall.</summary>
+    private const int MaxNameSearchDepth = 3;
+
+    private static IEnumerable<string> Walk(string root, int maxDepth)
+    {
+        var queue = new Queue<(string Dir, int Depth)>();
+        queue.Enqueue((root, 0));
+        while (queue.Count > 0)
+        {
+            var (dir, depth) = queue.Dequeue();
+            yield return dir;
+            if (depth >= maxDepth) continue;
+            IEnumerable<string> subs;
+            try { subs = Directory.EnumerateDirectories(dir); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+            foreach (var sub in subs) queue.Enqueue((sub, depth + 1));
+        }
     }
 
     /// <summary>A bridge id for a local path: base64url of its UTF-8 bytes. The bridge re-validates on every request, so an id grants nothing by itself.</summary>

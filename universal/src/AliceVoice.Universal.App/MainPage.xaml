@@ -28,6 +28,10 @@
                         <Button x:Name="ConnectButton" Text="Connect" Style="{StaticResource Chip}" Clicked="OnConnect" />
                     </HorizontalStackLayout>
                 </Grid>
+                <!-- Backend chips: Alice LOCAL on Ollama, then every fleet member.
+                     The Picker in Options stays the full control; this is the same
+                     choice one click away, and it shows which backend is live. -->
+                <FlexLayout x:Name="BackendChipRow" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start" />
                 <FlexLayout Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start">
                     <HorizontalStackLayout Spacing="5" Margin="0,0,14,2" ToolTipProperties.Text="Connection to the selected agent">
                         <BoxView x:Name="PresenceDot" WidthRequest="9" HeightRequest="9" CornerRadius="5" Color="{StaticResource AppRed}" VerticalOptions="Center" />
@@ -212,12 +216,23 @@
             </VerticalStackLayout>
         </Grid>
 
-        <!-- bottom quarter: the app log only -->
+        <!-- bottom quarter: the dock. The log, plus what is happening now, the route of
+             the turn and its timings - the same discipline as the web page's dock. The
+             whole layout reserves this space; the log is never overlaid on the talk. -->
         <Grid Grid.Row="1" RowDefinitions="Auto,*" BackgroundColor="#FF07070A">
-            <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Padding="12,4" ColumnSpacing="8" BackgroundColor="#FF0C0C12">
-                <Label Text="App log · read-only · select text to copy" Style="{StaticResource Dim}" FontSize="11" VerticalOptions="Center" />
-                <Label x:Name="CopyStatus" Grid.Column="1" Style="{StaticResource Dim}" FontSize="11" VerticalOptions="Center" />
-                <Button Grid.Column="2" Text="Copy all" Style="{StaticResource Chip}" Clicked="OnCopyLog" ToolTipProperties.Text="Copy the whole log to the clipboard" />
+            <Grid Grid.Row="0" RowDefinitions="Auto,Auto,Auto" Padding="12,4" BackgroundColor="#FF0C0C12">
+                <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                    <Label Text="App log · read-only · select text to copy" Style="{StaticResource Dim}" FontSize="11" VerticalOptions="Center" />
+                    <Label x:Name="CopyStatus" Grid.Column="1" Style="{StaticResource Dim}" FontSize="11" VerticalOptions="Center" />
+                    <Button Grid.Column="2" Text="Copy all" Style="{StaticResource Chip}" Clicked="OnCopyLog" ToolTipProperties.Text="Copy the whole log to the clipboard" />
+                </Grid>
+                <Label x:Name="DockNow" Grid.Row="1" Text="idle" FontSize="11.5" FontAttributes="Bold"
+                       LineBreakMode="TailTruncation" Margin="0,2,0,0"
+                       ToolTipProperties.Text="What is happening right now" />
+                <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="14">
+                    <Label x:Name="DockRoute" Text="route —" Style="{StaticResource Dim}" FontSize="11" LineBreakMode="TailTruncation" />
+                    <Label x:Name="DockTimings" Grid.Column="1" Text="timings —" Style="{StaticResource Dim}" FontSize="11" LineBreakMode="TailTruncation" />
+                </Grid>
             </Grid>
             <ScrollView x:Name="LogScroll" Grid.Row="1">
                 <local:SelectableLabel x:Name="LogLabel" Padding="12,4" FontSize="11.5" FontFamily="Consolas"

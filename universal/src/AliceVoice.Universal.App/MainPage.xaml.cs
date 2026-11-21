@@ -21,6 +21,8 @@ public partial class MainPage : ContentPage
     private bool _wakeServiceOn;
     private int _overlayVersion = -1;
     private string? _logShown;
+    private readonly List<Button> _backendChips = new();
+    private bool _backendChipsBuilt;
 
     public MainPage(VoiceSession session, IServiceProvider services)
     {
@@ -144,6 +146,8 @@ public partial class MainPage : ContentPage
             MetricsSummary.Text = _session.Latency.Summary;
             MetricsTable.Text = _session.Latency.Table;
             FillPickers();
+            FillBackendChips();
+            PaintDock();
             FillTranscript();
             FillLog();
             ApplyBackground();
@@ -192,6 +196,48 @@ public partial class MainPage : ContentPage
         }
         var voiceIndex = _session.VoiceNames.ToList().FindIndex(v => v == _session.SelectedVoice);
         if (voiceIndex >= 0 && VoicePicker.SelectedIndex != voiceIndex) VoicePicker.SelectedIndex = voiceIndex;
+    }
+
+    // Backend chips: Alice LOCAL on Ollama, then every fleet member. Any fleet member can
+    // be the backend. This is the same choice the Agent picker offers, one click away in
+    // the top bar, and it shows which backend is live.
+    private void FillBackendChips()
+    {
+        if (!_backendChipsBuilt)
+        {
+            _backendChipsBuilt = true;
+            foreach (var target in _session.Targets)
+            {
+                var chip = new Button { Text = target.DisplayName, Margin = new Thickness(0, 0, 6, 4) };
+                if (FindStyle("Chip") is { } chipStyle) chip.Style = chipStyle;
+                ToolTipProperties.SetText(chip, target.Id == VoiceSession.AliceLocalId
+                    ? "Alice LOCAL — the local Ollama brain, wherever it runs"
+                    : $"Fleet member {target.Id} — a Hermes agent backend");
+                var id = target.Id;
+                chip.Clicked += async (_, _) => await GuardUi(nameof(FillBackendChips), () => _session.SelectTargetAsync(id));
+                _backendChips.Add(chip);
+                BackendChipRow.Children.Add(chip);
+            }
+        }
+        for (var i = 0; i < _backendChips.Count && i < _session.Targets.Count; i++)
+            Paint(_backendChips[i], _session.Targets[i].Id == _session.SelectedTargetId);
+    }
+
+    // The dock carries the same three facts the web page's dock carries: what is happening
+    // now (amber while busy, red on an error), the route of the turn, and its timings.
+    // Space for it is reserved by the layout, so the log is never overlaid on the talk.
+    private void PaintDock()
+    {
+        var busy = !string.Equals(_session.Activity, "Ready", StringComparison.Ordinal);
+        var failed = !string.IsNullOrEmpty(_session.Error) || !string.IsNullOrEmpty(_session.StageError);
+        DockNow.Text = failed
+            ? "error · " + (_session.Error ?? _session.StageError)
+            : busy
+                ? (string.IsNullOrEmpty(_session.ActivityDetail) ? _session.Activity : _session.Activity + " · " + _session.ActivityDetail)
+                : _session.Connected ? "idle · connected to " + _session.TargetName : "idle · not connected";
+        DockNow.TextColor = failed ? Tone(StatusTone.Red) : busy ? Tone(StatusTone.Amber) : Color.FromArgb("#73737E");
+        DockRoute.Text = $"route · {_session.TargetName} · {_session.BackendLabel} · {_session.ProviderLabel} / {_session.VoiceLabel}";
+        DockTimings.Text = "timings · " + _session.Latency.LastTurnLine;
     }
 
     private void FillTranscript()
