@@ -17,9 +17,16 @@ namespace AliceVoice.Core.Voice;
 public sealed class AliceLocalBackend : IVoiceBackend
 {
     private const int MaxToolTurns = 4;
+    /// <summary>
+    /// The tools the local brain may call. The display trio is here because the web page's local me
+    /// has it - the relay registers those for both brains - and this app hosts them on its own
+    /// screen. A host that cannot run them answers with an error result, exactly as an unknown tool
+    /// does on the page.
+    /// </summary>
     private static readonly HashSet<string> KnownTools = new(StringComparer.Ordinal)
     {
-        "honcho_search", "honcho_save", "honcho_forget", "time", "search"
+        "honcho_search", "honcho_save", "honcho_forget", "time", "search",
+        "gui_list_pictures", "gui_show_image", "gui_image_clear"
     };
     private readonly AliceVoiceOptions _options;
     private readonly OllamaChatClient _ollama;
@@ -32,6 +39,15 @@ public sealed class AliceLocalBackend : IVoiceBackend
     /// <summary>Test seam. Production runs <c>alice_local_tools.py</c>.</summary>
     internal Func<string, string, CancellationToken, Task<string>>? RunTool { get; set; }
 
+    /// <summary>
+    /// The host's own tools, tried before the Python bridge. Return <c>null</c> for a tool that is
+    /// not yours and the call falls through to <c>alice_local_tools.py</c> untouched. This is how a
+    /// host gives the local brain the tools only it can run: App U, for instance, runs the display
+    /// commands on its own screen and answers with a real result, so local-me can show a picture
+    /// here exactly as she can on the web page.
+    /// </summary>
+    public Func<string, string, CancellationToken, Task<string?>>? ToolHost { get; set; }
+
     internal const string ToolDescriptions =
         "You can use tools. To call one, reply with ONLY a JSON object " +
         "of the form {\"tool\": \"<name>\", \"args\": {...}} and no other text. " +
@@ -43,7 +59,14 @@ public sealed class AliceLocalBackend : IVoiceBackend
         "- honcho_forget: {\"content\": \"<exact fact to delete>\"} or {\"query\": \"<search terms>\"} — remove a fact from memory.\n" +
         "- time: {} — the current local time.\n" +
         "- search: {\"query\": \"<search terms>\"} — web search. Speak the results naturally. Do not honcho_save search results.\n" +
+        "- gui_list_pictures: {\"n\": 12} — the pictures you are allowed to show him, names only. Call this when you do not know a name.\n" +
+        "- gui_show_image: {\"file\": \"<a name from gui_list_pictures>\"} — show Master a picture on his screen, right now. " +
+        "You may pass {\"src\": \"<absolute path or https URL>\"} instead of file. Optional: " +
+        "{\"mode\": \"stage|card|backdrop\", \"caption\": \"<short line>\", \"keep\": true, \"duration_s\": 20}.\n" +
+        "- gui_image_clear: {\"id\": \"<optional id>\"} — take a picture back off the screen.\n" +
         "Trigger phrases:\n" +
+        "- \"Show me…\" a picture, or any request to see something → gui_show_image with a name, calling gui_list_pictures first if you need one.\n" +
+        "- \"Take that down\" or \"clear the picture\" → gui_image_clear.\n" +
         "- \"Remember that…\" or \"Remember I…\" → honcho_save.\n" +
         "- \"What do you know about me?\" → honcho_search first, then speak the results.\n" +
         "- \"Forget that…\", \"Remove that…\", \"Delete that…\", or \"I don't like that anymore\" → honcho_forget.\n" +
@@ -202,7 +225,7 @@ public sealed class AliceLocalBackend : IVoiceBackend
     public async Task<bool> RememberAsync(string content, CancellationToken ct = default)
     {
         var args = new JsonObject { ["content"] = RememberContent(content) }.ToJsonString();
-        var result = await (RunTool ?? RunToolAsync)("honcho_save", args, ct);
+        var result = await RunToolCoreAsync("honcho_save", args, ct);
         try
         {
             using var doc = JsonDocument.Parse(result);
@@ -231,7 +254,7 @@ public sealed class AliceLocalBackend : IVoiceBackend
         try
         {
             result = IsKnownTool(tool)
-                ? await (RunTool ?? RunToolAsync)(tool, argsJson, ct)
+                ? await RunToolCoreAsync(tool, argsJson, ct)
                 : UnknownToolResult(tool);
         }
         catch (Exception ex)
@@ -281,6 +304,14 @@ public sealed class AliceLocalBackend : IVoiceBackend
         JsonNode? args;
         try { args = JsonNode.Parse(argsJson); } catch (JsonException) { args = new JsonObject(); }
         return new JsonObject { ["tool"] = tool, ["args"] = args ?? new JsonObject() }.ToJsonString();
+    }
+
+    /// <summary>The test seam wins outright; otherwise the host gets first refusal, then the Python bridge.</summary>
+    private async Task<string> RunToolCoreAsync(string tool, string argsJson, CancellationToken ct)
+    {
+        if (RunTool is not null) return await RunTool(tool, argsJson, ct);
+        if (ToolHost is not null && await ToolHost(tool, argsJson, ct) is { } mine) return mine;
+        return await RunToolAsync(tool, argsJson, ct);
     }
 
     private async Task<string> RunToolAsync(string tool, string argsJson, CancellationToken ct)

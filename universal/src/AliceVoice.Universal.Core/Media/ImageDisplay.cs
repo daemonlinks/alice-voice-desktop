@@ -45,6 +45,9 @@ public sealed class ImageDisplay : IDisposable
     /// <summary>Completes when the most recent load has finished (tests, and a clean shutdown).</summary>
     public Task WhenIdle() { lock (_gate) return _pending; }
 
+    /// <summary>The share rules this display applies, when it has a local share (Windows). Null on a phone, which asks the Beast.</summary>
+    public MediaShare? Share => _localShare;
+
     /// <summary>Run one allowlisted command. Never throws, never blocks on I/O.</summary>
     public void Submit(ToolCommand command)
     {

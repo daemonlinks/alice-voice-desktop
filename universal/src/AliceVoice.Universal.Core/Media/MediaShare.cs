@@ -100,6 +100,41 @@ public sealed class MediaShare
     }
 
     /// <summary>
+    /// Up to <paramref name="n"/> showable names (filename without extension), first root first,
+    /// sorted within a root and de-duplicated. This mirrors the web page's
+    /// <c>_picture_names</c> exactly, so a local model is offered the same names in both
+    /// products - and <see cref="ResolveName"/> turns one back into a file.
+    /// </summary>
+    public IReadOnlyList<string> Catalogue(int n = 12)
+    {
+        var cap = Math.Clamp(n, 1, 40);
+        var names = new List<string>(cap);
+        foreach (var root in _roots)
+        {
+            IEnumerable<string> files;
+            try { files = Directory.EnumerateFiles(root, "*", SearchOption.TopDirectoryOnly); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+            var byName = _cmp == StringComparison.OrdinalIgnoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            foreach (var file in files.OrderBy(f => Path.GetFileName(f), byName))
+            {
+                if (!TryKindOf(file, out _, out _)) continue;
+                var stem = Path.GetFileNameWithoutExtension(file);
+                if (stem.Length == 0 || names.Contains(stem, StringComparer.OrdinalIgnoreCase)) continue;
+                names.Add(stem);
+                if (names.Count >= cap) return names;
+            }
+        }
+        return names;
+    }
+
+    /// <summary>The web page's hint, word for word, so a refusal reads the same in both products.</summary>
+    public string CatalogueHint(int n = 8)
+    {
+        var names = Catalogue(n);
+        return names.Count == 0 ? "no pictures found in the allowed folders" : "name one of these: " + string.Join(", ", names);
+    }
+
+    /// <summary>
     /// Resolve a bare picture name to a file under the allowed roots. Alice LOCAL can name a
     /// picture but cannot be expected to produce an absolute path, which is the local leg's way in -
     /// the web page's <c>gui_list_pictures</c> names work the same way. The extension is optional,
