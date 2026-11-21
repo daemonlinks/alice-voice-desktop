@@ -116,8 +116,15 @@ public sealed class VoiceSession : IAsyncDisposable
         SelectedTargetId = AliceLocalId;
         ProfileHint = SessionCopy.ProfileHint(Profile);
         SensitivityText = "0.50 (threshold 0.50)";
-        Targets = new[] { new SessionTarget(AliceLocalId, "Alice LOCAL") }
-            .Concat(FleetRoster.Members.Select(m => new SessionTarget(m.Name, m.DisplayName)))
+        // Master's ask, 21 Nov: the two alice_voice entries sit together at the top, LOCAL first. The
+        // roster order put Alice_Windows between them, which makes a mis-tap easy - and a mis-tap here
+        // is not a wrong menu, it is the wrong agent. Everything else keeps its roster order below.
+        var roster = FleetRoster.Members.Select(m => new SessionTarget(m.Name, m.DisplayName)).ToList();
+        var mine = roster.Where(t => t.Id == "alice_voice" || t.Id.StartsWith("alice_voice_")).ToList();
+        var others = roster.Where(t => !mine.Contains(t)).ToList();
+        Targets = new[] { new SessionTarget(AliceLocalId, "alice_voice LOCAL") }
+            .Concat(mine)
+            .Concat(others)
             .ToList();
     }
 

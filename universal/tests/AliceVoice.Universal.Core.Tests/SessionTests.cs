@@ -32,7 +32,7 @@ public class VoiceSessionTests
         Assert.Contains("1–2", fx.Manager.LastOptions.StyleHint);
         Assert.Contains(fx.Session.Transcript, t => t.Kind == TranscriptKind.User && t.Text.Contains("hello there"));
         Assert.Contains("Sapi:Hello back", fx.Speech.Spoken);
-        Assert.Equal("Replied from Alice LOCAL", fx.Session.StatusText);
+        Assert.Equal("Replied from alice_voice LOCAL", fx.Session.StatusText);
         Assert.Equal(1, fx.Session.Latency.Items.Count);
     }
 
@@ -242,7 +242,7 @@ public class VoiceSessionTests
 
         Assert.Null(fx.Session.Error);
         Assert.Contains(fx.Session.Transcript, t => t.Kind == TranscriptKind.Alice && t.Text == "Hello back" && t.ShowRemember);
-        Assert.Equal("Replied from Alice LOCAL", fx.Session.StatusText);
+        Assert.Equal("Replied from alice_voice LOCAL", fx.Session.StatusText);
     }
 
     [Fact]
@@ -368,7 +368,7 @@ public class VoiceSessionTests
         Assert.Contains(fx.Session.Transcript, t => t.Text.Contains("first question"));
         Assert.Contains(fx.Session.Transcript, t => t.Text.Contains("second question"));
         Assert.Contains(fx.Session.Transcript, t => t.Kind == TranscriptKind.Alice && t.Text == "Hello back");
-        Assert.Equal("Replied from Alice LOCAL", fx.Session.StatusText);
+        Assert.Equal("Replied from alice_voice LOCAL", fx.Session.StatusText);
     }
 
     [Fact]
