@@ -211,7 +211,7 @@ public partial class MainPage : ContentPage
                 var chip = new Button { Text = target.DisplayName, Margin = new Thickness(0, 0, 6, 4) };
                 if (FindStyle("Chip") is { } chipStyle) chip.Style = chipStyle;
                 ToolTipProperties.SetText(chip, target.Id == VoiceSession.AliceLocalId
-                    ? "Alice LOCAL — the local Ollama brain on the Beast"
+                    ? "Alice LOCAL — the local Ollama brain, wherever it runs"
                     : $"Fleet member {target.Id} — a Hermes agent backend");
                 var id = target.Id;
                 chip.Clicked += async (_, _) => await GuardUi(nameof(FillBackendChips), () => _session.SelectTargetAsync(id));
