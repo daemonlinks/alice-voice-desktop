@@ -330,13 +330,14 @@ public partial class MainPage : ContentPage
             }
             else
             {
+                var plum = entry.Kind == TranscriptKind.Plum;
                 card.Children.Add(new Label
                 {
                     Text = $"{entry.Speaker}  #{entry.Turn} · {entry.At:HH:mm:ss}",
                     FontSize = 10,
-                    TextColor = Color.FromArgb("#73737E")
+                    TextColor = Color.FromArgb(plum ? "#D8B4FE" : "#73737E")
                 });
-                card.Children.Add(MessageText(entry.Text, 13, "#E8E8ED"));
+                card.Children.Add(MessageText(entry.Text, 13, plum ? "#EDE1FF" : "#E8E8ED"));
             }
             if (entry.ShowRemember)
             {
@@ -354,14 +355,21 @@ public partial class MainPage : ContentPage
             var align = entry.Kind switch
             {
                 TranscriptKind.User => LayoutOptions.Start,
-                TranscriptKind.Alice => LayoutOptions.End,
+                TranscriptKind.Alice or TranscriptKind.Plum => LayoutOptions.End,
                 _ => LayoutOptions.Center
             };
             return new Border
             {
                 Content = card,
-                Stroke = Color.FromArgb(entry.Kind == TranscriptKind.User ? "#66FF3B3B" : "#1F1F2A"),
-                BackgroundColor = Color.FromArgb("#E6000000"),
+                // Plum is the same girl on the same screen, so her bubble matches the voice page's
+                // facet colour: #a855f7 border, #2a1a2e fill, #d8b4fe name (Master, 2026-11-22).
+                Stroke = Color.FromArgb(entry.Kind switch
+                {
+                    TranscriptKind.User => "#66FF3B3B",
+                    TranscriptKind.Plum => "#CCA855F7",
+                    _ => "#1F1F2A"
+                }),
+                BackgroundColor = Color.FromArgb(entry.Kind == TranscriptKind.Plum ? "#E62A1A2E" : "#E6000000"),
                 Padding = 4,
                 StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 12 },
                 HorizontalOptions = align

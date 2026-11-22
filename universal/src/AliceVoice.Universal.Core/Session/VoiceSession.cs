@@ -17,7 +17,7 @@ namespace AliceVoice.Universal.Session;
 
 public enum StageLamp { Dim, Green, Yellow, Red, Wait }
 public enum NoteKind { Dim, Green, Yellow, Red }
-public enum TranscriptKind { User, Alice, System }
+public enum TranscriptKind { User, Alice, Plum, System }
 
 public sealed class TranscriptEntry
 {
@@ -62,6 +62,8 @@ public sealed class VoiceSession : IAsyncDisposable
     private readonly PushToTalkGesture _ptt = new();
     private readonly UtteranceBuffer _utterance = new(minSeconds: 0.3, maxSeconds: 120);
     private readonly Dictionary<string, VoiceProfile> _memberVoices;
+    /// <summary>A facet's own voice slot in the same assignment file: "&lt;target&gt;#plum".</summary>
+    private const string PlumSuffix = "#plum";
     private readonly List<TranscriptEntry> _transcript = new();
     private readonly List<string> _logs = new();
     private readonly object _gate = new();
@@ -767,12 +769,30 @@ public sealed class VoiceSession : IAsyncDisposable
         }
         else
         {
-            if (_streamEntry is not null)
+            var blocks = FacetMarkers.Split(reply);
+            if (blocks.Count > 1 || (blocks.Count == 1 && FacetMarkers.HasMarker(reply)))
             {
-                _streamEntry.Text = reply;
-                _streamEntry.ShowRemember = true;
+                // A two-facet turn: one bubble per girl in HER colour, so the split is visible on the
+                // screen, and the streaming bubble that held the raw [Plum] markers goes away
+                // (Master, 2026-11-22).
+                if (_streamEntry is not null) { _transcript.Remove(_streamEntry); _streamEntry = null; }
+                for (var i = 0; i < blocks.Count; i++)
+                {
+                    var (facet, blockText) = blocks[i];
+                    Append(facet == Facet.Plum ? TranscriptKind.Plum : TranscriptKind.Alice,
+                           facet == Facet.Plum ? "Plum" : target, blockText, showRemember: i == blocks.Count - 1);
+                }
             }
-            else Append(TranscriptKind.Alice, target, string.IsNullOrWhiteSpace(reply) && _turnShowedPicture ? "\U0001F5BC picture" : reply, showRemember: true);
+            else
+            {
+                var plain = FacetMarkers.Strip(reply);
+                if (_streamEntry is not null)
+                {
+                    _streamEntry.Text = plain;
+                    _streamEntry.ShowRemember = true;
+                }
+                else Append(TranscriptKind.Alice, target, string.IsNullOrWhiteSpace(plain) && _turnShowedPicture ? "\U0001F5BC picture" : plain, showRemember: true);
+            }
             _streamTurnId = 0;
             _streamEntry = null;
         }
@@ -786,7 +806,18 @@ public sealed class VoiceSession : IAsyncDisposable
             TtsLamp = StageLamp.Green;
             Touch();
             var tts = Stopwatch.StartNew();
-            try { await _providers.SpeakAsync(CurrentProfile, reply, ct); }
+            try
+            {
+                // Her block borrows HER voice, and the next block hands alice_voice's settings straight
+                // back - a temporary override, never a change to what he chose (Master, 2026-11-22).
+                var speech = FacetMarkers.Split(reply);
+                if (speech.Count == 0) speech.Add((Facet.Alice, reply));
+                foreach (var (facet, spoken) in speech)
+                {
+                    if (facet == Facet.Plum) AddLog($"Plum speaks: {ProfileFor(facet)}");
+                    await _providers.SpeakAsync(await ProfileForAsync(facet, ct), spoken, ct);
+                }
+            }
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
@@ -826,10 +857,10 @@ public sealed class VoiceSession : IAsyncDisposable
                 {
                     if (_streamEntry is null)
                     {
-                        _streamEntry = Append(TranscriptKind.Alice, TargetName, partial, showRemember: false);
+                        _streamEntry = Append(TranscriptKind.Alice, TargetName, FacetMarkers.Strip(partial), showRemember: false);
                         if (_conversation is not null && IsAliceLocal) _streamEntry.PendingShared = true;
                     }
-                    else _streamEntry.Text = partial;
+                    else _streamEntry.Text = FacetMarkers.Strip(partial);
                     LlmLamp = StageLamp.Green;
                     Touch();
                 }
@@ -876,6 +907,68 @@ public sealed class VoiceSession : IAsyncDisposable
     }
 
     private VoiceProfile CurrentProfile => new(SelectedProvider ?? VoiceProviderKind.Sapi, SelectedVoice);
+
+    /// <summary>Whose voice a block speaks with, without allocating anything (for the log line).</summary>
+    private string ProfileFor(Facet facet) =>
+        facet == Facet.Plum && _memberVoices.TryGetValue(FacetKey(facet), out var plum) && !string.IsNullOrWhiteSpace(plum.Voice)
+            ? plum.Voice
+            : SelectedVoice;
+
+    /// <summary>
+    /// Alice speaks in the member's own settings; Plum has her own slot beside them, and reaching for it
+    /// is a temporary override for the length of her block (Master, 2026-11-22).
+    /// </summary>
+    private async Task<VoiceProfile> ProfileForAsync(Facet facet, CancellationToken ct)
+    {
+        if (facet != Facet.Plum) return CurrentProfile;
+        if (_memberVoices.TryGetValue(FacetKey(facet), out var plum) && !string.IsNullOrWhiteSpace(plum.Voice)) return plum;
+        return await AllocateFacetVoiceAsync(facet, ct) ?? CurrentProfile;
+    }
+
+    /// <summary>
+    /// Nobody has ever chosen a voice for this facet, so the policy picks one: the next UNUSED female
+    /// voice, best quality first, and it is remembered from then on (Master, 2026-11-22). If every
+    /// female voice the provider offers is already taken, she speaks in the current voice instead of
+    /// quietly stealing another girl's.
+    /// </summary>
+    private async Task<VoiceProfile?> AllocateFacetVoiceAsync(Facet facet, CancellationToken ct)
+    {
+        if (SelectedProvider is not { } kind) return null;
+        try
+        {
+            var provider = _providers.Providers.FirstOrDefault(p => p.Kind == kind);
+            if (provider is null) return null;
+            var catalogue = (await provider.ListVoicesAsync(ct)).ToList();
+            if (catalogue.Count == 0)
+            {
+                AddLog($"{facet}: no voice list to allocate from - speaking with alice_voice's voice");
+                return null;
+            }
+            var mine = FacetKey(facet);
+            var used = _memberVoices
+                .Where(kv => !kv.Key.Equals(mine, StringComparison.OrdinalIgnoreCase))
+                .Select(kv => kv.Value.Voice);
+            var chosen = VoicePolicy.NextUnusedFemale(used, catalogue);
+            if (chosen is null)
+            {
+                AddLog($"{facet}: every unused female voice is already taken - speaking with alice_voice's voice");
+                return null;
+            }
+            var profile = new VoiceProfile(kind, chosen);
+            _memberVoices[mine] = profile;
+            SaveVoices();
+            AddLog($"Voice allocated: {chosen} -> {facet} (next unused female, best quality first)");
+            return profile;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Facet voice allocation failed");
+            return null;
+        }
+    }
+
+    /// <summary>Plum keeps her own slot in the same assignment file: "&lt;target&gt;#plum".</summary>
+    private string FacetKey(Facet facet) => SelectedTargetId + (facet == Facet.Plum ? PlumSuffix : "");
 
     private async Task RestoreVoiceAsync()
     {
@@ -1217,7 +1310,7 @@ public sealed class VoiceSession : IAsyncDisposable
             Text = text,
             Turn = _turnSeq,
             At = new DateTimeOffset(_local()),
-            ShowRemember = showRemember && kind == TranscriptKind.Alice,
+            ShowRemember = showRemember && kind is TranscriptKind.Alice or TranscriptKind.Plum,
             RememberEnabled = IsAliceLocal,
             RememberLabel = "♥ remember"
         };
