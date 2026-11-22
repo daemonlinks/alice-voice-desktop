@@ -127,6 +127,28 @@ public class VoicePolicyTests
     }
 
     [Fact]
+    public void ACelebrityVoiceNeverBecomesAGirlsVoice()
+    {
+        // AllTalk's real roster: the celebrity voices must never be allocated to one of the girls.
+        string[] catalogue = { "arnold.wav", "Clint_Eastwood CC3.wav", "female_05.wav", "male_01.wav" };
+        Assert.False(VoicePolicy.LooksFemale("arnold.wav"));
+        Assert.False(VoicePolicy.LooksFemale("Clint_Eastwood CC3.wav"));
+        Assert.False(VoicePolicy.LooksFemale("David_Attenborough CC3.wav"));
+        Assert.True(VoicePolicy.LooksFemale("Sophie_Anderson CC3.wav"));
+        Assert.Equal("female_05.wav", VoicePolicy.NextUnusedFemale(Array.Empty<string>(), catalogue));
+    }
+
+    [Fact]
+    public void AVoiceThatSaysFemaleIsPreferredOverOneThatMerelyFailsToLookMale()
+    {
+        string[] catalogue = { "en_GB-quirky-medium", "[unlabelled]", "female_02.wav" };
+        Assert.Equal("female_02.wav", VoicePolicy.NextUnusedFemale(Array.Empty<string>(), catalogue));
+        // ...but an unlabelled voice is still used when nothing says "female", rather than leaving her mute
+        Assert.Equal("en_GB-quirky-medium",
+            VoicePolicy.NextUnusedFemale(new[] { "female_02.wav" }, new[] { "en_GB-quirky-medium", "[unlabelled]" }));
+    }
+
+    [Fact]
     public void TheSameCatalogueAlwaysAllocatesTheSameVoice()
     {
         string[] catalogue = { "en_GB-bella-medium", "en_GB-alba-medium", "en_GB-aria-medium" };

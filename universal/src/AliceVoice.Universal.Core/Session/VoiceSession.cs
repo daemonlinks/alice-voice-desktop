@@ -998,7 +998,10 @@ public sealed class VoiceSession : IAsyncDisposable
                 var mine = _memberVoices.TryGetValue(target.Id, out var profile) && !string.IsNullOrWhiteSpace(profile.Voice)
                     ? profile
                     : null;
-                if (mine is not null && claimed.Add(VoicePolicy.Normalise(mine.Voice))) continue;
+                // His own choice is kept - but only if it IS one of the girls' voices and no other backend
+                // already has it. A male voice (AllTalk offers arnold, Clint Eastwood, ...) would defeat the
+                // whole point of this pass, so it is moved onto a female one (Master, 2026-11-22).
+                if (mine is not null && VoicePolicy.LooksFemale(mine.Voice) && claimed.Add(VoicePolicy.Normalise(mine.Voice))) continue;
 
                 var pick = VoicePolicy.NextDistinctFemale(claimed, catalogues, mine?.Provider ?? SelectedProvider);
                 if (pick is null)
