@@ -23,6 +23,8 @@ public partial class MainPage : ContentPage
     private bool _wakeServiceOn;
     private int _overlayVersion = -1;
     private string? _logShown;
+    private string? _transcriptShown;
+    private int _transcriptDrawn;
     private readonly List<Button> _backendChips = new();
     private bool _backendChipsBuilt;
 
@@ -262,11 +264,65 @@ public partial class MainPage : ContentPage
         DockTimings.Text = "timings · " + _session.Latency.LastTurnLine;
     }
 
+    /// <summary>
+    /// The conversation panel, and it FOLLOWS the conversation (Master, 2026-11-22: "the conversation
+    /// screen needs to follow the conversation ... the comments have now gone off the bottom of the
+    /// view"). Two faults produced that: the panel was rebuilt on every 80 ms tick, and nothing ever
+    /// moved the scroll. Now the panel is repainted only when the transcript really changed, new turns
+    /// are APPENDED rather than re-created (so a reader scrolled up is not yanked around), and when the
+    /// newest turn arrives while the reader is at the bottom, the view follows it.
+    /// </summary>
     private void FillTranscript()
     {
-        TranscriptPanel.Children.Clear();
-        foreach (var entry in _session.Transcript)
+        var entries = _session.Transcript;
+        var signature = TranscriptSignature(entries);
+        if (signature == _transcriptShown) return;
+        var first = _transcriptShown is null;
+        var follow = first || AtTranscriptBottom();
+        if (!first && _transcriptDrawn > 0 && entries.Count > _transcriptDrawn)
         {
+            for (var i = _transcriptDrawn; i < entries.Count; i++)
+                TranscriptPanel.Children.Add(TranscriptCard(entries[i]));
+        }
+        else
+        {
+            TranscriptPanel.Children.Clear();
+            foreach (var entry in entries) TranscriptPanel.Children.Add(TranscriptCard(entry));
+        }
+        _transcriptShown = signature;
+        _transcriptDrawn = entries.Count;
+        if (follow) FollowTranscript();
+    }
+
+    /// <summary>What the panel currently shows, cheaply: a changed signature means a repaint is due.</summary>
+    private static string TranscriptSignature(IReadOnlyList<TranscriptEntry> entries)
+    {
+        if (entries.Count == 0) return "0";
+        var last = entries[entries.Count - 1];
+        var remembers = 0;
+        foreach (var entry in entries) if (entry.ShowRemember) remembers++;
+        return $"{entries.Count}|{last.Kind}|{last.Speaker}|{last.Turn}|{last.Text?.Length ?? 0}|{remembers}";
+    }
+
+    /// <summary>True when the reader is already at (or within a line of) the newest turn.</summary>
+    private bool AtTranscriptBottom()
+    {
+        if (TranscriptScroll.Height <= 0 || TranscriptScroll.ContentSize.Height <= 0) return true;
+        return TranscriptScroll.ScrollY + TranscriptScroll.Height >= TranscriptScroll.ContentSize.Height - 48;
+    }
+
+    /// <summary>Scroll after the new cards have been laid out, never during the rebuild.</summary>
+    private void FollowTranscript() => Dispatcher.Dispatch(() => _ = ScrollTranscriptEndAsync());
+
+    private async Task ScrollTranscriptEndAsync()
+    {
+        try { await TranscriptScroll.ScrollToAsync(0, double.MaxValue, animated: true); }
+        catch (Exception ex) { NotePaintFailure(ex); }
+    }
+
+    /// <summary>One turn as it is drawn. Shared by the first fill, the rebuild and the append path.</summary>
+    private View TranscriptCard(TranscriptEntry entry)
+    {
             var card = new VerticalStackLayout { Spacing = 2, Padding = 8, MaximumWidthRequest = 640 };
             if (entry.Kind == TranscriptKind.System)
             {
@@ -301,7 +357,7 @@ public partial class MainPage : ContentPage
                 TranscriptKind.Alice => LayoutOptions.End,
                 _ => LayoutOptions.Center
             };
-            TranscriptPanel.Children.Add(new Border
+            return new Border
             {
                 Content = card,
                 Stroke = Color.FromArgb(entry.Kind == TranscriptKind.User ? "#66FF3B3B" : "#1F1F2A"),
@@ -309,8 +365,7 @@ public partial class MainPage : ContentPage
                 Padding = 4,
                 StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 12 },
                 HorizontalOptions = align
-            });
-        }
+            };
     }
 
     /// <summary>
