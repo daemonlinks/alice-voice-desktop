@@ -67,7 +67,8 @@ public static class UniversalServices
             sp.GetRequiredService<SoulReloadHub>().Register(recording.ReloadSoulAsync);
             return recording;
         });
-        services.AddSingleton<IFleetChat>(_ => new HermesApiFleetChat(options.ResolvedHermesApiUrl));
+        services.AddSingleton<IFleetChat>(_ => new HermesApiFleetChat(
+            options.ResolvedHermesApiUrl, turnTimeout: options.ResolvedFleetTurnTimeout));
         services.AddSingleton<IPiperSynth>(_ => new PiperSynth(options));
         if (host.BridgeEnabled)
         {
@@ -116,7 +117,8 @@ public static class UniversalServices
             services.AddSingleton<ISttClient, UnconfiguredRemoteSttClient>();
             services.AddSingleton<ISoulGateway, RefusingSoulGateway>();
             services.AddSingleton<IVoiceBackend, UnconfiguredAliceLocalBackend>();
-            services.AddSingleton<IFleetChat>(_ => new HermesApiFleetChat(options.ResolvedHermesApiUrl));
+            services.AddSingleton<IFleetChat>(_ => new HermesApiFleetChat(
+                options.ResolvedHermesApiUrl, turnTimeout: options.ResolvedFleetTurnTimeout));
         }
     }
 }
