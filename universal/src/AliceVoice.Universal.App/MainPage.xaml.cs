@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using AliceVoice.Core.Logging;
 using AliceVoice.Core.Voice;
 using AliceVoice.Universal.Audio;
@@ -15,6 +16,7 @@ public partial class MainPage : ContentPage
     private readonly IServiceProvider _services;
     private readonly HashSet<string> _missingStyles = new(StringComparer.Ordinal);
     private IDispatcherTimer? _timer;
+    private readonly Stopwatch _workWatch = new();
     private bool _started;
     private bool _rendering;
     private bool _sawPress;
@@ -87,7 +89,27 @@ public partial class MainPage : ContentPage
         {
             VersionLine.Text = $"App U v{_session.Version}";
             ApplyLamps();
-            ActivityLine.Text = _session.Activity;
+            // A real agent turn can honestly take a minute or two (a backed agent runs tools). Show the
+            // wait running, so the app is visibly alive instead of looking stalled - and say how long, so
+            // a slow turn is legible rather than silent (Master, 2026-11-22).
+            var working = _session.Activity is "Thinking…" or "Transcribing…" or "Connecting…";
+            if (working)
+            {
+                if (!_workWatch.IsRunning) _workWatch.Restart();
+            }
+            else
+            {
+                _workWatch.Reset();
+            }
+            var waited = _workWatch.Elapsed;
+            ActivityLine.Text = working && waited.TotalSeconds >= 1
+                ? $"{_session.Activity}  {FormatWait(waited)}"
+                : _session.Activity;
+            ActivityLine.TextColor = working && waited.TotalSeconds >= 60
+                ? Color.FromArgb("#EF4444")
+                : working && waited.TotalSeconds >= 10
+                    ? Color.FromArgb("#EAB308")
+                    : Color.FromArgb("#E5E7EB");
             var stageNote = string.IsNullOrEmpty(_session.StageError) ? "" : _session.StageError;
             ActivityDetail.Text = string.IsNullOrEmpty(stageNote)
                 ? _session.ActivityDetail
@@ -379,17 +401,39 @@ public partial class MainPage : ContentPage
         OptionsToggle.Text = OptionsPanel.IsVisible ? "Options ▾" : "Options ▸";
     }
 
+    private static string FormatWait(TimeSpan t) => t.TotalMinutes >= 1
+        ? $"{(int)t.TotalMinutes}m {t.Seconds:00}s"
+        : $"{(int)t.TotalSeconds}s";
+
     private void ApplyLamps()
     {
         var presence = StatusTones.Presence(_session.Connected, _session.Activity);
         PresenceDot.Color = Tone(presence);
         PresenceText.Text = presence switch
         {
-            StatusTone.Amber => "Connecting",
-            StatusTone.Red => "Offline",
-            _ => "Connected"
+            StatusTone.Amber => "CONNECTING",
+            StatusTone.Red => "OFFLINE",
+            _ => "CONNECTED"
         };
         PresenceText.TextColor = Tone(presence);
+        // Name the backend on the badge. A 9px dot reading "Connected" was too easy to miss
+        // (Master, 2026-11-22: "I can't see the Presence chip is lit ... make it more obvious").
+        PresenceBackend.Text = presence == StatusTone.Green
+            ? $"{_session.AgentLabel} · {_session.BackendLabel}"
+            : $"{_session.AgentLabel} · not connected";
+        PresenceBackend.TextColor = Tone(presence);
+        PresenceBadge.BackgroundColor = presence switch
+        {
+            StatusTone.Green => Color.FromArgb("#12291C"),
+            StatusTone.Amber => Color.FromArgb("#2A2415"),
+            _ => Color.FromArgb("#2A1518")
+        };
+        PresenceBadge.Stroke = new SolidColorBrush(presence switch
+        {
+            StatusTone.Green => Color.FromArgb("#2E9E5B"),
+            StatusTone.Amber => Color.FromArgb("#B8860B"),
+            _ => Color.FromArgb("#C0392B")
+        });
 
         var activity = StatusTones.Activity(_session.Activity, _session.Connected);
         ActivityDot.Color = Tone(activity);

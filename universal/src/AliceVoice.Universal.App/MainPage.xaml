@@ -33,10 +33,15 @@
                      choice one click away, and it shows which backend is live. -->
                 <FlexLayout x:Name="BackendChipRow" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start" />
                 <FlexLayout Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start">
-                    <HorizontalStackLayout Spacing="5" Margin="0,0,14,2" ToolTipProperties.Text="Connection to the selected agent">
-                        <BoxView x:Name="PresenceDot" WidthRequest="9" HeightRequest="9" CornerRadius="5" Color="{StaticResource AppRed}" VerticalOptions="Center" />
-                        <Label x:Name="PresenceText" Text="Offline" FontSize="12" VerticalOptions="Center" />
-                    </HorizontalStackLayout>
+                    <Border x:Name="PresenceBadge" Margin="0,0,14,2" Padding="10,5" StrokeThickness="1"
+                            BackgroundColor="#2A1518" Stroke="#C0392B"
+                            ToolTipProperties.Text="Which backend agent is behind this app, and whether it is connected">
+                        <HorizontalStackLayout Spacing="8">
+                            <BoxView x:Name="PresenceDot" WidthRequest="14" HeightRequest="14" CornerRadius="7" Color="{StaticResource AppRed}" VerticalOptions="Center" />
+                            <Label x:Name="PresenceText" Text="OFFLINE" FontSize="15" FontAttributes="Bold" VerticalOptions="Center" />
+                            <Label x:Name="PresenceBackend" Text="" FontSize="14" VerticalOptions="Center" />
+                        </HorizontalStackLayout>
+                    </Border>
                     <HorizontalStackLayout Spacing="5" Margin="0,0,14,2" ToolTipProperties.Text="What App U is doing in this turn">
                         <BoxView x:Name="ActivityDot" WidthRequest="9" HeightRequest="9" CornerRadius="5" Color="{StaticResource AppTextDim}" VerticalOptions="Center" />
                         <Label x:Name="ActivityLine" Text="Ready" FontSize="12" FontAttributes="Bold" VerticalOptions="Center" />
