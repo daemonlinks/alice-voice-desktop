@@ -245,6 +245,7 @@ public sealed class VoiceSession : IAsyncDisposable
         catch (Exception ex) { Log.Warning(ex, "Failed to load voice assignments"); }
         _initializing = false;
         await RestoreVoiceAsync();
+        await EnsureDistinctVoicesAsync(CancellationToken.None);
         await CheckForUpdatesAsync();
         await WarmUpSttAsync();
         Append(TranscriptKind.System, "", SessionCopy.Startup, showRemember: false);
@@ -969,6 +970,59 @@ public sealed class VoiceSession : IAsyncDisposable
 
     /// <summary>Plum keeps her own slot in the same assignment file: "&lt;target&gt;#plum".</summary>
     private string FacetKey(Facet facet) => SelectedTargetId + (facet == Facet.Plum ? PlumSuffix : "");
+
+    /// <summary>
+    /// One voice per backend, so Master can tell who is answering with his ears alone (Master,
+    /// 2026-11-22: "it would be nice if the voices were different for all backends to avoid confusing me").
+    /// A backend that already has a voice keeps it; anything missing, or already claimed by a backend
+    /// earlier in the roster, is given the next unused female voice - best quality first, spilling into the
+    /// next engine when one catalogue runs out, so every backend still ends up sounding like itself.
+    /// Facet slots ("#plum") are left to their own lazy allocation, which already avoids every voice here.
+    /// </summary>
+    private async Task EnsureDistinctVoicesAsync(CancellationToken ct)
+    {
+        try
+        {
+            var catalogues = new List<(VoiceProviderKind Provider, IReadOnlyList<string> Voices)>();
+            foreach (var provider in _providers.Providers)
+            {
+                try { catalogues.Add((provider.Kind, await provider.ListVoicesAsync(ct))); }
+                catch (Exception ex) { Log.Warning(ex, "Voice list unavailable: {Provider}", provider.DisplayName); }
+            }
+            if (catalogues.Count == 0) return;
+
+            var claimed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var changed = 0;
+            foreach (var target in Targets)
+            {
+                var mine = _memberVoices.TryGetValue(target.Id, out var profile) && !string.IsNullOrWhiteSpace(profile.Voice)
+                    ? profile
+                    : null;
+                if (mine is not null && claimed.Add(VoicePolicy.Normalise(mine.Voice))) continue;
+
+                var pick = VoicePolicy.NextDistinctFemale(claimed, catalogues, mine?.Provider ?? SelectedProvider);
+                if (pick is null)
+                {
+                    AddLog($"Voices: nothing left for {target.DisplayName} - it speaks in the current voice");
+                    continue;
+                }
+                _memberVoices[target.Id] = new VoiceProfile(pick.Value.Provider, pick.Value.Voice);
+                claimed.Add(VoicePolicy.Normalise(pick.Value.Voice));
+                changed++;
+                AddLog($"Voice: {target.DisplayName} -> {VoicePolicy.Normalise(pick.Value.Voice)}"
+                       + (mine is null ? " (allocated: next unused female)" : " (moved: that voice was another backend's)"));
+            }
+            if (changed > 0)
+            {
+                SaveVoices();
+                AddLog($"Voices: {changed} backend(s) given their own voice - no two of them sound alike now");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "The distinct-voice pass failed");
+        }
+    }
 
     private async Task RestoreVoiceAsync()
     {

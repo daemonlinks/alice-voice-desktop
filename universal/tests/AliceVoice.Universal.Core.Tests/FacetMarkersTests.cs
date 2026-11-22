@@ -1,3 +1,4 @@
+using AliceVoice.Core.Voice;
 using AliceVoice.Universal.Session;
 using AliceVoice.Universal.Voice;
 using Xunit;
@@ -132,5 +133,33 @@ public class VoicePolicyTests
         Assert.Equal(
             VoicePolicy.NextUnusedFemale(Array.Empty<string>(), catalogue),
             VoicePolicy.NextUnusedFemale(Array.Empty<string>(), catalogue));
+    }
+
+    [Fact]
+    public void ABackendKeepsItsOwnEngineWhileThatEngineHasAnythingFree()
+    {
+        var catalogues = new (VoiceProviderKind, IReadOnlyList<string>)[]
+        {
+            (VoiceProviderKind.AllTalk, new[] { "female_06.wav" }),
+            (VoiceProviderKind.Piper, new[] { "en_GB-alba-medium", "en_GB-aru-medium" }),
+        };
+        var pick = VoicePolicy.NextDistinctFemale(Array.Empty<string>(), catalogues, VoiceProviderKind.AllTalk);
+        Assert.NotNull(pick);
+        Assert.Equal(VoiceProviderKind.AllTalk, pick!.Value.Provider);
+        Assert.Equal("female_06.wav", pick.Value.Voice);
+    }
+
+    [Fact]
+    public void OneEngineRunningOutDoesNotMakeTwoBackendsSoundAlike()
+    {
+        var catalogues = new (VoiceProviderKind, IReadOnlyList<string>)[]
+        {
+            (VoiceProviderKind.AllTalk, new[] { "female_06.wav" }),
+            (VoiceProviderKind.Piper, new[] { "en_GB-alba-medium", "en_GB-aru-medium" }),
+        };
+        var pick = VoicePolicy.NextDistinctFemale(new[] { "female_06.wav" }, catalogues, VoiceProviderKind.AllTalk);
+        Assert.NotNull(pick);
+        Assert.Equal(VoiceProviderKind.Piper, pick!.Value.Provider);
+        Assert.Equal("en_GB-alba-medium", pick.Value.Voice);   // best quality, then A-Z
     }
 }

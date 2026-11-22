@@ -1,5 +1,7 @@
 namespace AliceVoice.Universal.Voice;
 
+using AliceVoice.Core.Voice;
+
 /// <summary>
 /// Who speaks with what when nobody has chosen a voice.
 ///
@@ -68,5 +70,29 @@ public static class VoicePolicy
             .OrderByDescending(Quality)
             .ThenBy(c => Normalise(c), StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
+    }
+
+    /// <summary>
+    /// A distinct voice for one backend, across engines: its own engine is searched first (never move a
+    /// backend off the engine it already uses if that engine has anything left), then the preferred one,
+    /// then the rest. This is what stops two backends sounding alike when one provider runs out - Master,
+    /// 2026-11-22: "it would be nice if the voices were different for all backends to avoid confusing me".
+    /// </summary>
+    public static (VoiceProviderKind Provider, string Voice)? NextDistinctFemale(
+        IEnumerable<string?> used,
+        IReadOnlyList<(VoiceProviderKind Provider, IReadOnlyList<string> Voices)> catalogues,
+        VoiceProviderKind? prefer = null)
+    {
+        var order = new List<VoiceProviderKind>();
+        if (prefer is { } first) order.Add(first);
+        order.AddRange(catalogues.Select(c => c.Provider).Where(p => !order.Contains(p)));
+        foreach (var provider in order)
+        {
+            var entry = catalogues.FirstOrDefault(c => c.Provider == provider);
+            if (entry.Voices is null || entry.Voices.Count == 0) continue;
+            var voice = NextUnusedFemale(used, entry.Voices);
+            if (voice is not null) return (provider, voice);
+        }
+        return null;
     }
 }
