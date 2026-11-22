@@ -14,12 +14,14 @@ public sealed class AliceVoiceAgentBackend : IVoiceBackend
 {
     private static readonly FleetMember Member = FleetRoster.Find("alice_voice") ?? new FleetMember("alice_voice", "alice_voice", "Alice Voice");
     private HermesApiFleetChat _chat;
+    private readonly TimeSpan _turnTimeout;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     public AliceVoiceAgentBackend(AliceVoiceOptions options)
     {
         Settings = VoiceBackendSettings.For(VoiceBackendKind.AliceVoiceAgent, options);
-        _chat = new HermesApiFleetChat(Settings.AgentEndpoint);
+        _turnTimeout = options.ResolvedFleetTurnTimeout;
+        _chat = new HermesApiFleetChat(Settings.AgentEndpoint, turnTimeout: _turnTimeout);
     }
 
     public VoiceBackendKind Kind => VoiceBackendKind.AliceVoiceAgent;
@@ -33,7 +35,7 @@ public sealed class AliceVoiceAgentBackend : IVoiceBackend
         if (settings.AgentEndpoint != Settings.AgentEndpoint)
         {
             _chat.Dispose();
-            _chat = new HermesApiFleetChat(settings.AgentEndpoint);
+            _chat = new HermesApiFleetChat(settings.AgentEndpoint, turnTimeout: _turnTimeout);
         }
         Settings = settings;
         await _chat.EnsureReachableAsync(Member, ct); // throws when unreachable / unauthorised
