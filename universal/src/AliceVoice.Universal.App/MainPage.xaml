@@ -91,11 +91,21 @@
                 <FlexLayout x:Name="BackendChipRow" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start" />
 
                 <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
-                <HorizontalStackLayout x:Name="PickerRow" Grid.Column="0" Spacing="0"
+                <HorizontalStackLayout x:Name="PickerRow" Grid.Column="0" Spacing="10" VerticalOptions="Center"
                             ToolTipProperties.Text="Agent: who answers. Provider: which brain. Voice: how she sounds.">
-                    <Picker x:Name="AgentPicker" Title="Agent" WidthRequest="180" TextColor="{StaticResource AppText}" Margin="0,0,8,2" SelectedIndexChanged="OnAgentChanged" />
-                    <Picker x:Name="ProviderPicker" Title="Provider" WidthRequest="150" TextColor="{StaticResource AppText}" Margin="0,0,8,2" SelectedIndexChanged="OnProviderChanged" />
-                    <Picker x:Name="VoicePicker" Title="Voice" WidthRequest="180" TextColor="{StaticResource AppText}" Margin="0,0,8,2" SelectedIndexChanged="OnVoiceChanged" />
+                    <!-- the title sits INLINE with its dropdown, not on a line above it (Master, 2026-11-23) -->
+                    <HorizontalStackLayout Spacing="5" VerticalOptions="Center">
+                        <Label Text="Agent" Style="{StaticResource Dim}" FontSize="11" VerticalOptions="Center" />
+                        <Picker x:Name="AgentPicker" WidthRequest="170" TextColor="{StaticResource AppText}" SelectedIndexChanged="OnAgentChanged" />
+                    </HorizontalStackLayout>
+                    <HorizontalStackLayout Spacing="5" VerticalOptions="Center">
+                        <Label Text="Provider" Style="{StaticResource Dim}" FontSize="11" VerticalOptions="Center" />
+                        <Picker x:Name="ProviderPicker" WidthRequest="140" TextColor="{StaticResource AppText}" SelectedIndexChanged="OnProviderChanged" />
+                    </HorizontalStackLayout>
+                    <HorizontalStackLayout Spacing="5" VerticalOptions="Center">
+                        <Label Text="Voice" Style="{StaticResource Dim}" FontSize="11" VerticalOptions="Center" />
+                        <Picker x:Name="VoicePicker" WidthRequest="170" TextColor="{StaticResource AppText}" SelectedIndexChanged="OnVoiceChanged" />
+                    </HorizontalStackLayout>
                 </HorizontalStackLayout>
 
                 <!-- the picture controls, then test voice / reset / connect, all on ONE line to the RIGHT of the
