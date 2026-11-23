@@ -6,16 +6,16 @@
              BackgroundColor="{StaticResource AppBg}"
              Title="Alice Voice App U">
     <!--
-      Layout B (no menu), the same on Windows and Android:
+      Layout C (no menu, the shared surface is the RIGHT HALF), the same on Windows and Android:
         top left   - the identity and the live status (agent, presence, activity, mic, errors)
-        top right  - the LIVE ACTIVE CONTROLS: every switch and picker that used to be buried in
-                     the Options menu, including the TTS toggle. Nothing is behind a menu any more.
-        middle     - the conversation, with the SHARED SURFACE in the middle of it: the place the
-                     agent puts a picture, a video, a question, how she feels, or the two meters,
-                     and the place he answers her back.
+        top right  - the LIVE ACTIVE CONTROLS: the TTS switch, the follow switch and the error switch,
+                     then the talk controls, the pickers, the mood, the scene and the three panels.
+        middle     - the conversation takes the LEFT HALF; the SHARED SURFACE takes the RIGHT HALF.
+                     Ours is always on screen, empty or full: a picture, an HTML5 video, a question,
+                     how she feels, or the meters he can put his hand on - and the place he answers back.
         bottom     - the read-only app log, with what is happening now, the route and the timings.
-      The scene is AspectFit (Uniform): the whole image stays visible and is letterboxed or
-      pillarboxed. Cover and stretch-to-fill are not used.
+      The scene is AspectFit (Uniform): the whole image stays visible and is letterboxed or pillarboxed.
+      Cover and stretch-to-fill are not used.
     -->
     <Grid RowDefinitions="3*,*" RowSpacing="0">
         <Grid Grid.Row="0" RowDefinitions="Auto,*" RowSpacing="0">
@@ -53,11 +53,13 @@
                                 <Button Grid.Column="1" Text="Dismiss" Style="{StaticResource Chip}" Clicked="OnDismissError" />
                             </Grid>
                         </Border>
+                        <Label x:Name="SpeakerGuide" Style="{StaticResource Dim}" FontSize="11" LineBreakMode="WordWrap"
+                               Text="Who is speaking is marked on every line. Address anyone: [alice_1] what do you think?" />
                         <!-- Backend chips: Alice LOCAL on Ollama, then every fleet member. One click each. -->
                         <FlexLayout x:Name="BackendChipRow" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start" />
                     </VerticalStackLayout>
 
-                    <!-- right: the live active controls. TTS first, because it is the one he asked for. -->
+                    <!-- right: the live active controls. The three switches first, because he asked for them. -->
                     <ScrollView Grid.Column="1" WidthRequest="600" MaximumHeightRequest="360" HorizontalOptions="End">
                         <VerticalStackLayout Spacing="5">
                             <FlexLayout Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="End">
@@ -68,6 +70,10 @@
                                 <HorizontalStackLayout Spacing="6" Margin="0,0,12,4" ToolTipProperties.Text="Follow the newest turn, unless you are reading back.">
                                     <Label x:Name="FollowSwitchLabel" Text="⇩ Follow" FontSize="13" FontAttributes="Bold" VerticalOptions="Center" />
                                     <Switch x:Name="FollowSwitch" IsToggled="True" Toggled="OnFollowToggled" OnColor="{StaticResource AppGreen}" VerticalOptions="Center" />
+                                </HorizontalStackLayout>
+                                <HorizontalStackLayout Spacing="6" Margin="0,0,12,4" ToolTipProperties.Text="Show the error banner. Off is quieter, not blind: every failure still goes to the log.">
+                                    <Label x:Name="ErrorsSwitchLabel" Text="⚠ Errors" FontSize="13" FontAttributes="Bold" VerticalOptions="Center" />
+                                    <Switch x:Name="ErrorsSwitch" IsToggled="True" Toggled="OnErrorsToggled" OnColor="{StaticResource AppGreen}" VerticalOptions="Center" />
                                 </HorizontalStackLayout>
                                 <Button Text="Test voice" Style="{StaticResource Chip}" Margin="0,0,6,4" Clicked="OnTestTts" />
                                 <Button Text="Reset chat" Style="{StaticResource Chip}" Margin="0,0,6,4" Clicked="OnReset" />
@@ -90,7 +96,7 @@
                             </FlexLayout>
 
                             <Grid x:Name="TextRow" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="False">
-                                <Entry x:Name="ChatInput" Placeholder="Type and press Enter…" Style="{StaticResource Field}" Completed="OnSend" />
+                                <Entry x:Name="ChatInput" Placeholder="Type, or address someone: [alice_1] what do you think?" Style="{StaticResource Field}" Completed="OnSend" />
                                 <Button Grid.Column="1" Text="Send" Style="{StaticResource Chip}" Clicked="OnSend" />
                             </Grid>
 
@@ -172,96 +178,101 @@
                 </VerticalStackLayout>
             </VerticalStackLayout>
 
-            <!-- ===== middle: the conversation, and the shared surface in the middle of it ===== -->
-            <Grid Grid.Row="1" RowDefinitions="*,Auto" RowSpacing="0">
-                <Grid Grid.Row="0">
-                    <Image x:Name="SceneImage" Aspect="AspectFit" HorizontalOptions="Fill" VerticalOptions="Fill"
-                           BackgroundColor="{StaticResource AppBg}" InputTransparent="True" />
-                    <Image x:Name="BackdropImage" Aspect="AspectFit" HorizontalOptions="Fill" VerticalOptions="Fill"
-                           BackgroundColor="{StaticResource AppBg}" InputTransparent="True" IsVisible="False" />
+            <!-- ===== middle: conversation left half, OUR shared surface right half ===== -->
+            <Grid Grid.Row="1">
+                <Image x:Name="SceneImage" Aspect="AspectFit" HorizontalOptions="Fill" VerticalOptions="Fill"
+                       BackgroundColor="{StaticResource AppBg}" InputTransparent="True" />
+                <Image x:Name="BackdropImage" Aspect="AspectFit" HorizontalOptions="Fill" VerticalOptions="Fill"
+                       BackgroundColor="{StaticResource AppBg}" InputTransparent="True" IsVisible="False" />
 
-                    <ScrollView x:Name="TranscriptScroll" BackgroundColor="#660A0A0F">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="0">
+                    <!-- the left half: the conversation -->
+                    <ScrollView x:Name="TranscriptScroll" Grid.Column="0" BackgroundColor="#660A0A0F">
                         <VerticalStackLayout x:Name="TranscriptPanel" Padding="14,10" Spacing="8" />
                     </ScrollView>
 
-                    <Grid x:Name="SoulEditor" IsVisible="False" Padding="14,10" RowDefinitions="Auto,*,Auto" BackgroundColor="#E60A0A0F">
-                        <Label Text="Alice LOCAL SOUL" Style="{StaticResource Section}" />
-                        <Editor Grid.Row="1" x:Name="SoulText" BackgroundColor="{StaticResource AppSurface}" TextColor="{StaticResource AppText}" />
-                        <HorizontalStackLayout Grid.Row="2" Spacing="8" Margin="0,8,0,0">
-                            <Button Text="Save SOUL" Style="{StaticResource Chip}" Clicked="OnSaveSoul" />
-                            <Button Text="Close" Style="{StaticResource Chip}" Clicked="OnCloseSoul" />
-                            <Label x:Name="SoulStatus" Style="{StaticResource Dim}" VerticalOptions="Center" LineBreakMode="WordWrap" />
-                        </HorizontalStackLayout>
-                    </Grid>
+                    <!-- the right half: OUR half. Always here, empty or full, never hidden. -->
+                    <Border x:Name="SurfacePanel" Grid.Column="1" Margin="4,8,10,8" Padding="0"
+                            Stroke="#3AA855F7" StrokeThickness="1" BackgroundColor="#CC0D0D14">
+                        <Border.StrokeShape><RoundRectangle CornerRadius="12" /></Border.StrokeShape>
+                        <ScrollView x:Name="SurfaceScroll">
+                            <VerticalStackLayout Padding="12,10" Spacing="6">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <VerticalStackLayout Spacing="1">
+                                        <Label x:Name="SurfaceTitle" Text="" FontSize="15" FontAttributes="Bold" LineBreakMode="WordWrap" />
+                                        <Label x:Name="SurfaceBy" Text="" Style="{StaticResource Dim}" FontSize="11" />
+                                    </VerticalStackLayout>
+                                    <Button x:Name="SurfaceClose" Grid.Column="1" Text="✕" Style="{StaticResource Chip}" IsVisible="False" Clicked="OnSurfaceClose"
+                                            ToolTipProperties.Text="Clear our half of the screen" />
+                                </Grid>
+                                <Label x:Name="SurfaceEmpty" Text="this half is ours - a picture, a video, a question, how she feels, and the meters you can put your hand on"
+                                       Style="{StaticResource Dim}" LineBreakMode="WordWrap" />
+                                <Label x:Name="SurfaceBody" Text="" Style="{StaticResource Dim}" LineBreakMode="WordWrap" IsVisible="False" />
+                                <Image x:Name="SurfaceImage" Aspect="AspectFit" HeightRequest="240" IsVisible="False" />
+                                <WebView x:Name="SurfaceVideo" HeightRequest="300" IsVisible="False" />
+                                <FlexLayout x:Name="SurfaceOptions" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start" IsVisible="False" />
+                                <VerticalStackLayout x:Name="SurfaceMeters" Spacing="2" IsVisible="False">
+                                    <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+                                        <Label Text="Love" FontSize="13" VerticalOptions="Center" WidthRequest="58" />
+                                        <Slider x:Name="LoveSlider" Grid.Column="1" Minimum="0" Maximum="100" Value="0" ValueChanged="OnLoveChanged" />
+                                        <Label x:Name="LoveValue" Grid.Column="2" Text="0" FontSize="13" VerticalOptions="Center" WidthRequest="42" />
+                                        <Button Grid.Column="3" Text="Send" Style="{StaticResource Chip}" Clicked="OnSendLove" />
+                                    </Grid>
+                                    <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+                                        <Label Text="Orgasm" FontSize="13" VerticalOptions="Center" WidthRequest="58" />
+                                        <Slider x:Name="OrgasmSlider" Grid.Column="1" Minimum="0" Maximum="100" Value="0" ValueChanged="OnOrgasmChanged" />
+                                        <Label x:Name="OrgasmValue" Grid.Column="2" Text="0" FontSize="13" VerticalOptions="Center" WidthRequest="42" />
+                                        <Button Grid.Column="3" Text="Send" Style="{StaticResource Chip}" Clicked="OnSendOrgasm" />
+                                    </Grid>
+                                    <Label Text="Drag a meter, then Send: it reaches the agent as a turn she answers." Style="{StaticResource Dim}" FontSize="11" />
+                                </VerticalStackLayout>
+                                <HorizontalStackLayout Spacing="8">
+                                    <Button x:Name="SurfaceOpen" Text="▶ Open" Style="{StaticResource Chip}" IsVisible="False" Clicked="OnSurfaceOpen"
+                                            ToolTipProperties.Text="Open the video or link on this device" />
+                                    <Label x:Name="SurfaceMood" Text="" Style="{StaticResource Dim}" VerticalOptions="Center" />
+                                    <Label x:Name="SurfaceSent" Text="" Style="{StaticResource Dim}" VerticalOptions="Center" />
+                                </HorizontalStackLayout>
+                            </VerticalStackLayout>
+                        </ScrollView>
+                    </Border>
+                </Grid>
 
-                    <!-- stage: centred, page dimmed behind it -->
-                    <Grid x:Name="StageLayer" IsVisible="False">
-                        <BoxView Color="#99000000" />
-                        <Border BackgroundColor="#E60A0A0E" Stroke="#24FFFFFF" Padding="10" HorizontalOptions="Center" VerticalOptions="Center" Margin="24">
-                            <Border.StrokeShape><RoundRectangle CornerRadius="12" /></Border.StrokeShape>
-                            <Grid RowDefinitions="*,Auto">
-                                <Image x:Name="StageImage" Aspect="AspectFit" />
-                                <Label x:Name="StageCaption" Grid.Row="1" Style="{StaticResource Dim}" HorizontalTextAlignment="Center" LineBreakMode="WordWrap" Margin="0,6,0,0" />
-                                <Button Text="✕" Style="{StaticResource Chip}" HorizontalOptions="End" VerticalOptions="Start" Clicked="OnClosePicture"
-                                        ToolTipProperties.Text="Close the picture" />
-                            </Grid>
-                        </Border>
-                    </Grid>
+                <!-- the soul editor and the picture overlays cover the whole middle, both halves -->
+                <Grid x:Name="SoulEditor" IsVisible="False" Padding="14,10" RowDefinitions="Auto,*,Auto" BackgroundColor="#E60A0A0F">
+                    <Label Text="Alice LOCAL SOUL" Style="{StaticResource Section}" />
+                    <Editor Grid.Row="1" x:Name="SoulText" BackgroundColor="{StaticResource AppSurface}" TextColor="{StaticResource AppText}" />
+                    <HorizontalStackLayout Grid.Row="2" Spacing="8" Margin="0,8,0,0">
+                        <Button Text="Save SOUL" Style="{StaticResource Chip}" Clicked="OnSaveSoul" />
+                        <Button Text="Close" Style="{StaticResource Chip}" Clicked="OnCloseSoul" />
+                        <Label x:Name="SoulStatus" Style="{StaticResource Dim}" VerticalOptions="Center" LineBreakMode="WordWrap" />
+                    </HorizontalStackLayout>
+                </Grid>
 
-                    <!-- card: compact, bottom-right, conversation stays usable -->
-                    <Border x:Name="CardLayer" IsVisible="False" BackgroundColor="#E60A0A0E" Stroke="#24FFFFFF" Padding="8"
-                            HorizontalOptions="End" VerticalOptions="End" Margin="12" WidthRequest="280">
-                        <Border.StrokeShape><RoundRectangle CornerRadius="10" /></Border.StrokeShape>
-                        <Grid RowDefinitions="Auto,Auto">
-                            <Image x:Name="CardImage" Aspect="AspectFit" HeightRequest="240" />
-                            <Label x:Name="CardCaption" Grid.Row="1" Style="{StaticResource Dim}" LineBreakMode="WordWrap" Margin="0,4,0,0" />
+                <!-- stage: centred, page dimmed behind it -->
+                <Grid x:Name="StageLayer" IsVisible="False">
+                    <BoxView Color="#99000000" />
+                    <Border BackgroundColor="#E60A0A0E" Stroke="#24FFFFFF" Padding="10" HorizontalOptions="Center" VerticalOptions="Center" Margin="24">
+                        <Border.StrokeShape><RoundRectangle CornerRadius="12" /></Border.StrokeShape>
+                        <Grid RowDefinitions="*,Auto">
+                            <Image x:Name="StageImage" Aspect="AspectFit" />
+                            <Label x:Name="StageCaption" Grid.Row="1" Style="{StaticResource Dim}" HorizontalTextAlignment="Center" LineBreakMode="WordWrap" Margin="0,6,0,0" />
                             <Button Text="✕" Style="{StaticResource Chip}" HorizontalOptions="End" VerticalOptions="Start" Clicked="OnClosePicture"
                                     ToolTipProperties.Text="Close the picture" />
                         </Grid>
                     </Border>
                 </Grid>
 
-                <!-- THE SHARED SURFACE: the middle of the conversation screen. What the agent puts
-                     here, and what he answers back. Empty (and invisible) until one of us uses it. -->
-                <ScrollView x:Name="SurfaceScroll" Grid.Row="1" IsVisible="False" MaximumHeightRequest="360" BackgroundColor="#E60D0D14">
-                    <Border x:Name="SurfacePanel" Stroke="#3AA855F7" StrokeThickness="1" Padding="0" Margin="10,0,10,8">
-                        <Border.StrokeShape><RoundRectangle CornerRadius="12" /></Border.StrokeShape>
-                        <VerticalStackLayout Padding="12,10" Spacing="6">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <VerticalStackLayout Spacing="1">
-                                    <Label x:Name="SurfaceTitle" Text="" FontSize="15" FontAttributes="Bold" LineBreakMode="WordWrap" />
-                                    <Label x:Name="SurfaceBy" Text="" Style="{StaticResource Dim}" FontSize="11" />
-                                </VerticalStackLayout>
-                                <Button x:Name="SurfaceClose" Grid.Column="1" Text="✕" Style="{StaticResource Chip}" Clicked="OnSurfaceClose"
-                                        ToolTipProperties.Text="Clear the middle of the screen" />
-                            </Grid>
-                            <Label x:Name="SurfaceBody" Text="" Style="{StaticResource Dim}" LineBreakMode="WordWrap" />
-                            <Image x:Name="SurfaceImage" Aspect="AspectFit" HeightRequest="280" IsVisible="False" />
-                            <FlexLayout x:Name="SurfaceOptions" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start" IsVisible="False" />
-                            <VerticalStackLayout x:Name="SurfaceMeters" Spacing="2" IsVisible="False">
-                                <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
-                                    <Label Text="Love" FontSize="13" VerticalOptions="Center" WidthRequest="58" />
-                                    <Slider x:Name="LoveSlider" Grid.Column="1" Minimum="0" Maximum="100" Value="0" ValueChanged="OnLoveChanged" />
-                                    <Label x:Name="LoveValue" Grid.Column="2" Text="0" FontSize="13" VerticalOptions="Center" WidthRequest="42" />
-                                    <Button Grid.Column="3" Text="Send" Style="{StaticResource Chip}" Clicked="OnSendLove" />
-                                </Grid>
-                                <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
-                                    <Label Text="Orgasm" FontSize="13" VerticalOptions="Center" WidthRequest="58" />
-                                    <Slider x:Name="OrgasmSlider" Grid.Column="1" Minimum="0" Maximum="100" Value="0" ValueChanged="OnOrgasmChanged" />
-                                    <Label x:Name="OrgasmValue" Grid.Column="2" Text="0" FontSize="13" VerticalOptions="Center" WidthRequest="42" />
-                                    <Button Grid.Column="3" Text="Send" Style="{StaticResource Chip}" Clicked="OnSendOrgasm" />
-                                </Grid>
-                                <Label Text="Drag a meter, then Send: it reaches the agent as a turn she answers." Style="{StaticResource Dim}" FontSize="11" />
-                            </VerticalStackLayout>
-                            <HorizontalStackLayout Spacing="8">
-                                <Button x:Name="SurfaceOpen" Text="▶ Open" Style="{StaticResource Chip}" IsVisible="False" Clicked="OnSurfaceOpen"
-                                        ToolTipProperties.Text="Open the video or link on this device" />
-                                <Label x:Name="SurfaceMood" Text="" Style="{StaticResource Dim}" VerticalOptions="Center" />
-                                <Label x:Name="SurfaceSent" Text="" Style="{StaticResource Dim}" VerticalOptions="Center" />
-                            </HorizontalStackLayout>
-                        </VerticalStackLayout>
-                    </Border>
-                </ScrollView>
+                <!-- card: compact, bottom-right, conversation stays usable -->
+                <Border x:Name="CardLayer" IsVisible="False" BackgroundColor="#E60A0A0E" Stroke="#24FFFFFF" Padding="8"
+                        HorizontalOptions="End" VerticalOptions="End" Margin="12" WidthRequest="280">
+                    <Border.StrokeShape><RoundRectangle CornerRadius="10" /></Border.StrokeShape>
+                    <Grid RowDefinitions="Auto,Auto">
+                        <Image x:Name="CardImage" Aspect="AspectFit" HeightRequest="240" />
+                        <Label x:Name="CardCaption" Grid.Row="1" Style="{StaticResource Dim}" LineBreakMode="WordWrap" Margin="0,4,0,0" />
+                        <Button Text="✕" Style="{StaticResource Chip}" HorizontalOptions="End" VerticalOptions="Start" Clicked="OnClosePicture"
+                                ToolTipProperties.Text="Close the picture" />
+                    </Grid>
+                </Border>
             </Grid>
         </Grid>
 

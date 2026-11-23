@@ -207,7 +207,7 @@ public sealed class VoiceSession : IAsyncDisposable
         if (SpeakReplies == on) return;
         SpeakReplies = on;
         AddLog(on ? "Speech on - replies are spoken" : "Speech off - replies are captions only");
-        _prefs.Save(SpeakReplies, FollowConversation);
+        _prefs.Save(SpeakReplies, FollowConversation, ShowErrors);
         Touch();
     }
 
@@ -217,8 +217,123 @@ public sealed class VoiceSession : IAsyncDisposable
         if (FollowConversation == on) return;
         FollowConversation = on;
         AddLog(on ? "Follow on - the view will chase the newest turn" : "Follow off - the view stays where you put it");
-        _prefs.Save(SpeakReplies, FollowConversation);
+        _prefs.Save(SpeakReplies, FollowConversation, ShowErrors);
         Touch();
+    }
+
+    /// <summary>Whether a failing turn puts a banner on screen. Off is a quieter app, not a blind one: the
+    /// error still goes to the app log, which is the record anyway (Master, 2026-11-23).</summary>
+    public bool ShowErrors { get; private set; } = true;
+
+    public void SetShowErrors(bool on)
+    {
+        if (ShowErrors == on) return;
+        ShowErrors = on;
+        AddLog(on ? "Error banner on" : "Error banner off - failures still appear in this log");
+        _prefs.Save(SpeakReplies, FollowConversation, ShowErrors);
+        Touch();
+    }
+
+    /// <summary>
+    /// Who a typed line is addressed to. <c>[alice_1] what do you think?</c> or <c>@alice_1 ...</c> sends that
+    /// line to HER and leaves the conversation with her, which is how more than two voices share one thread
+    /// without the screen ever being vague about who just spoke. A line with no address goes to whoever is
+    /// selected, exactly as before (Master, 2026-11-23).
+    /// </summary>
+    public static (string? TargetId, string Text) ParseAddress(string? text, IReadOnlyList<SessionTarget> targets)
+    {
+        var trimmed = (text ?? "").Trim();
+        if (trimmed.Length == 0) return (null, trimmed);
+        string name;
+        string rest;
+        if (trimmed[0] == '[' && trimmed.IndexOf(']') is var close && close > 1)
+        {
+            name = trimmed[1..close];
+            rest = trimmed[(close + 1)..].Trim();
+        }
+        else if (trimmed[0] == '@')
+        {
+            var line = trimmed[1..];
+            var stop = line.IndexOfAny(new[] { ' ', '\t', ':', ',' });
+            name = stop < 0 ? line : line[..stop];
+            rest = stop < 0 ? "" : line[(stop + 1)..].Trim();
+        }
+        else
+        {
+            return (null, trimmed);
+        }
+        var id = MatchTarget(name, targets);
+        return id is null ? (null, trimmed) : (id, rest.Length == 0 ? trimmed : rest);
+    }
+
+    /// <summary>A name he would actually say: the id, the label, or just the number she answers to.</summary>
+    private static string? MatchTarget(string name, IReadOnlyList<SessionTarget> targets)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        var needle = name.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+        if (needle is "local" or "alice_local" or "local_alice" or "ollama")
+            foreach (var t in targets)
+                if (string.Equals(t.Id, AliceLocalId, StringComparison.OrdinalIgnoreCase)) return t.Id;
+        foreach (var t in targets)
+            if (string.Equals(t.Id, needle, StringComparison.OrdinalIgnoreCase)) return t.Id;
+        foreach (var t in targets)
+        {
+            var display = (t.DisplayName ?? "").Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+            if (display == needle) return t.Id;
+            if (display.StartsWith(needle + "_", StringComparison.Ordinal)) return t.Id;
+        }
+        if (needle.All(char.IsDigit))
+            foreach (var t in targets)
+                if (t.Id.EndsWith("_" + needle, StringComparison.OrdinalIgnoreCase)) return t.Id;
+        return null;
+    }
+
+    /// <summary>
+    /// The HTML5 page the video half shows. App U has no video control of its own, so the WebView is
+    /// handed a real page with a &lt;video&gt; element in it - exactly what a browser would show him.
+    /// A local file is served by this app's own media endpoint, because a WebView page cannot read
+    /// file:// for itself; an https URL is used as it stands (Master, 2026-11-23).
+    /// </summary>
+    public string BuildVideoPage(string src, string? title)
+    {
+        var url = VideoUrl(src);
+        var caption = System.Net.WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(title) ? "for you" : title);
+        var safe = System.Net.WebUtility.HtmlEncode(url);
+        return "<!doctype html><html><head><meta charset=\"utf-8\"><title>for you</title><style>" +
+               "html,body{margin:0;background:#07070a;color:#e8e8ed;font:13px system-ui,sans-serif}" +
+               "video{width:100%;max-height:420px;background:#000;display:block}" +
+               ".cap{padding:6px 8px;color:#b9b9c4}" +
+               "</style></head><body>" +
+               "<video src=\"" + safe + "\" controls autoplay playsinline preload=\"metadata\"></video>" +
+               "<div class=\"cap\">" + caption + "</div>" +
+               "<div class=\"cap\" id=\"why\"></div>" +
+               "<script>var v=document.querySelector('video');" +
+               "v.addEventListener('error',function(){document.getElementById('why').textContent=" +
+               "'this device cannot play this file here - use Open below';});" +
+               "</script></body></html>";
+    }
+
+    /// <summary>A URL a WebView can fetch: an https address as it stands, or this app's own media endpoint
+    /// for a file on this machine.</summary>
+    public string VideoUrl(string src)
+    {
+        if (src.Contains("://", StringComparison.Ordinal)) return src;
+        var host = _host.BridgeBindHost ?? "127.0.0.1";
+        var port = _host.BridgeBindPort ?? 8765;
+        return $"http://{host}:{port}/v1/media/{MediaShare.ToId(src)}";
+    }
+
+    /// <summary>The typed path for a shared thread: address it, move the conversation if it named someone else,
+    /// then send. Everything else in the app keeps using <see cref="SendTextAsync"/>.</summary>
+    public async Task SendAddressedAsync(string? text, CancellationToken ct = default)
+    {
+        var (target, rest) = ParseAddress(text, Targets);
+        if (target is not null && !string.Equals(target, SelectedTargetId, StringComparison.OrdinalIgnoreCase))
+        {
+            AddLog($"Spoken to {target} - the conversation moves there for this turn");
+            await SelectTargetAsync(target, ct);
+        }
+        await SendTextAsync(string.IsNullOrWhiteSpace(rest) ? text : rest, ct);
     }
 
     /// <summary>A surface picture that would not load is said out loud in the app log, never swallowed.</summary>

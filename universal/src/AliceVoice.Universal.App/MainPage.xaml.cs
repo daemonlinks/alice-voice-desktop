@@ -31,6 +31,7 @@ public partial class MainPage : ContentPage
     /// <summary>The shared middle of the conversation screen: the agent's, and his.</summary>
     private readonly SharedSurface _surface;
     private string? _surfaceShown;
+    private string? _videoShown;
     private bool _syncingToggles;
     private bool _syncingMeters;
 
@@ -130,7 +131,7 @@ public partial class MainPage : ContentPage
             StatusText.Text = _session.StatusText;
             UpdateBanner.IsVisible = !string.IsNullOrEmpty(_session.UpdateBanner);
             UpdateBanner.Text = _session.UpdateBanner ?? "";
-            ErrorBanner.IsVisible = !string.IsNullOrEmpty(_session.Error);
+            ErrorBanner.IsVisible = _session.ShowErrors && !string.IsNullOrEmpty(_session.Error);
             ErrorText.Text = _session.Error ?? "";
             ConnectButton.Text = _session.Connected ? "Disconnect" : "Connect";
             TalkButton.Text = _session.TalkButtonText;
@@ -342,11 +343,32 @@ public partial class MainPage : ContentPage
             else
             {
                 var plum = entry.Kind == TranscriptKind.Plum;
-                card.Children.Add(new Label
+                // The speaker chip: her name in her own ink, so a thread with four voices in it still
+                // reads cleanly at a glance (Master, 2026-11-23).
+                var ink = SpeakerInk(entry.Kind, entry.Speaker);
+                var chip = new HorizontalStackLayout { Spacing = 6 };
+                chip.Children.Add(new Label
                 {
-                    Text = $"{entry.Speaker}  #{entry.Turn} · {entry.At:HH:mm:ss}",
+                    Text = entry.Kind == TranscriptKind.User ? "You" : entry.Speaker,
+                    FontSize = 11,
+                    FontAttributes = FontAttributes.Bold,
+                    TextColor = Color.FromArgb(ink)
+                });
+                chip.Children.Add(new Label
+                {
+                    Text = entry.Turn > 0 ? $"#{entry.Turn} · {entry.At:HH:mm:ss}" : $"{entry.At:HH:mm:ss}",
                     FontSize = 10,
-                    TextColor = Color.FromArgb(plum ? "#D8B4FE" : "#73737E")
+                    TextColor = Color.FromArgb("#73737E")
+                });
+                card.Children.Add(new Border
+                {
+                    Content = chip,
+                    Stroke = Color.FromArgb("#33" + ink.Substring(1)),
+                    StrokeThickness = 1,
+                    BackgroundColor = Color.FromArgb("#1A000000"),
+                    Padding = new Thickness(7, 1),
+                    HorizontalOptions = LayoutOptions.Start,
+                    StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 8 }
                 });
                 card.Children.Add(MessageText(entry.Text, 13, plum ? "#EDE1FF" : "#E8E8ED"));
             }
@@ -378,7 +400,7 @@ public partial class MainPage : ContentPage
                 {
                     TranscriptKind.User => "#66FF3B3B",
                     TranscriptKind.Plum => "#CCA855F7",
-                    _ => "#1F1F2A"
+                    _ => "#33" + SpeakerInk(entry.Kind, entry.Speaker).Substring(1)
                 }),
                 BackgroundColor = Color.FromArgb(entry.Kind == TranscriptKind.Plum ? "#E62A1A2E" : "#E6000000"),
                 Padding = 4,
@@ -480,9 +502,11 @@ public partial class MainPage : ContentPage
         {
             if (TtsSwitch.IsToggled != _session.SpeakReplies) TtsSwitch.IsToggled = _session.SpeakReplies;
             if (FollowSwitch.IsToggled != _session.FollowConversation) FollowSwitch.IsToggled = _session.FollowConversation;
+            if (ErrorsSwitch.IsToggled != _session.ShowErrors) ErrorsSwitch.IsToggled = _session.ShowErrors;
             TtsSwitchLabel.Text = _session.SpeakReplies ? "🔊 Speak" : "🔇 Muted";
             TtsSwitchLabel.TextColor = _session.SpeakReplies ? Color.FromArgb("#E5E7EB") : Color.FromArgb("#EF4444");
             FollowSwitchLabel.Text = _session.FollowConversation ? "⇩ Follow" : "⇩ Held";
+            ErrorsSwitchLabel.Text = _session.ShowErrors ? "⚠ Errors" : "⚠ Hidden";
         }
         finally { _syncingToggles = false; }
     }
@@ -499,6 +523,12 @@ public partial class MainPage : ContentPage
         _session.SetFollowConversation(e.Value);
     }
 
+    private void OnErrorsToggled(object? sender, ToggledEventArgs e)
+    {
+        if (_syncingToggles) return;
+        _session.SetShowErrors(e.Value);
+    }
+
     /// <summary>
     /// The middle of the conversation screen: what the agent put there with <c>gui_surface</c>, and
     /// the controls he answers her with. Repaints only when the surface actually changed, because it
@@ -506,20 +536,30 @@ public partial class MainPage : ContentPage
     /// </summary>
     private void PaintSurface()
     {
-        if (SurfaceScroll is null) return;
+        if (SurfacePanel is null) return;
         var signature = _surface.Signature();
         if (signature == _surfaceShown) return;
         _surfaceShown = signature;
 
-        SurfaceScroll.IsVisible = _surface.HasContent;
-        if (!_surface.HasContent)
+        // Our half of the screen is always here now: empty, it says what it is for, and the ✕ only
+        // shows when there is something to clear (Master, 2026-11-23).
+        var has = _surface.HasContent;
+        SurfaceEmpty.IsVisible = !has;
+        SurfaceClose.IsVisible = has;
+        if (!has)
         {
+            SurfaceTitle.Text = "";
+            SurfaceBy.Text = "";
+            SurfaceBody.Text = "";
+            SurfaceBody.IsVisible = false;
             SurfaceImage.Source = null;
             SurfaceImage.IsVisible = false;
+            HideVideo();
             SurfaceOptions.Children.Clear();
             SurfaceOptions.IsVisible = false;
             SurfaceMeters.IsVisible = false;
             SurfaceOpen.IsVisible = false;
+            SurfaceMood.Text = "";
             SurfaceSent.Text = "";
             return;
         }
@@ -534,7 +574,13 @@ public partial class MainPage : ContentPage
         var isImage = _surface.Kind == SurfaceKind.Image && !string.IsNullOrWhiteSpace(_surface.Src);
         SurfaceImage.IsVisible = isImage;
         if (isImage) SurfaceImage.Source = SourceFor(_surface.Src);
-        SurfaceOpen.IsVisible = _surface.Kind == SurfaceKind.Video && !string.IsNullOrWhiteSpace(_surface.Src);
+
+        // A video is a real HTML5 page in a WebView - a <video> element, the same thing a browser would
+        // show him - so it plays in OUR half instead of being handed away to another app.
+        var isVideo = _surface.Kind == SurfaceKind.Video && !string.IsNullOrWhiteSpace(_surface.Src);
+        if (isVideo) ShowVideo(_surface.Src, _surface.Title);
+        else HideVideo();
+        SurfaceOpen.IsVisible = isVideo;
 
         // A question, as buttons: each one sends his answer back as his own turn.
         SurfaceOptions.Children.Clear();
@@ -563,6 +609,57 @@ public partial class MainPage : ContentPage
             }
             finally { _syncingMeters = false; }
         }
+    }
+
+    /// <summary>
+    /// The video is an HTML5 page in a WebView - a real &lt;video&gt; element, the same thing a browser
+    /// would show him - so it plays in OUR half of the screen instead of being handed to another app.
+    /// The page is rebuilt only when the file or the caption changes: repainting a WebView every 80 ms
+    /// would restart the film from the beginning.
+    /// </summary>
+    private void ShowVideo(string src, string title)
+    {
+        var page = _session.BuildVideoPage(src, title);
+        if (page != _videoShown)
+        {
+            _videoShown = page;
+            SurfaceVideo.Source = new HtmlWebViewSource { Html = page };
+        }
+        SurfaceVideo.IsVisible = true;
+    }
+
+    private void HideVideo()
+    {
+        if (!SurfaceVideo.IsVisible && _videoShown is null) return;
+        SurfaceVideo.IsVisible = false;
+        SurfaceVideo.Source = null;
+        _videoShown = null;
+    }
+
+    /// <summary>
+    /// Who is speaking, at a glance, on every line: his own turns are green, mine blue, Plum violet, a
+    /// fleet member wears a stable tint taken from her own name so two of them never look alike, and the
+    /// app itself is grey. With several voices in one thread this is the thing that must never be vague
+    /// (Master, 2026-11-23).
+    /// </summary>
+    private static string SpeakerInk(TranscriptKind kind, string speaker) => kind switch
+    {
+        TranscriptKind.User => "#9AE6B4",
+        TranscriptKind.Plum => "#D8B4FE",
+        TranscriptKind.System => "#73737E",
+        _ => FleetInk(speaker),
+    };
+
+    private static string FleetInk(string? speaker)
+    {
+        var name = (speaker ?? "").ToLowerInvariant();
+        if (name.Length == 0) return "#93C5FD";
+        if (name.Contains("alice_voice") || name.Contains("alice voice") || name == "alice" || name.Contains("windows") || name.Contains("local"))
+            return "#93C5FD";
+        var tints = new[] { "#FCD34D", "#7DD3FC", "#86EFAC", "#FDBA74", "#F9A8D4", "#A5B4FC", "#FDE68A", "#5EEAD4" };
+        var sum = 0;
+        foreach (var ch in name) sum = (sum * 31 + ch) & 0x7FFFFFFF;
+        return tints[sum % tints.Length];
     }
 
     private static string DefaultSurfaceTitle(SurfaceKind kind) => kind switch
@@ -781,7 +878,9 @@ public partial class MainPage : ContentPage
         if (string.IsNullOrWhiteSpace(text) || !_session.Connected)
             return;
         ChatInput.Text = "";
-        await GuardUi(nameof(OnSend), () => _session.SendTextAsync(text));
+        // A typed address sends the turn to HER and moves the conversation there for the next turn,
+        // which is how more than two voices share one thread without it ever being vague who spoke.
+        await GuardUi(nameof(OnSend), () => _session.SendAddressedAsync(text));
     }
 
     private async void OnSaveSoul(object? sender, EventArgs e) => await GuardUi(nameof(OnSaveSoul), () => _session.SaveSoulAsync(SoulText.Text ?? ""));
@@ -854,7 +953,7 @@ public partial class MainPage : ContentPage
         try
         {
             if (ErrorBanner is null || ErrorText is null || string.IsNullOrEmpty(_session.Error)) return;
-            ErrorBanner.IsVisible = true;
+            ErrorBanner.IsVisible = _session.ShowErrors;
             ErrorText.Text = _session.Error;
         }
         catch { /* banner paint is best-effort after the session error is stored */ }
