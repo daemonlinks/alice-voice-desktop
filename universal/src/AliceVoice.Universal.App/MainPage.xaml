@@ -78,17 +78,14 @@
                                 </HorizontalStackLayout>
                             </Grid>
 
-                            <!-- connect / disconnect, then the picture controls right under it -->
+                            <!-- the picture controls, then connect / disconnect, all on ONE line (Master, 2026-11-23) -->
                             <FlexLayout Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="End">
+                                <Button Text="◀" Style="{StaticResource Chip}" Margin="0,0,4,4" Clicked="OnPrevBg" ToolTipProperties.Text="Previous picture" />
+                                <Button Text="Random" Style="{StaticResource Chip}" Margin="0,0,4,4" Clicked="OnRandBg" ToolTipProperties.Text="Random picture" />
+                                <Button Text="▶" Style="{StaticResource Chip}" Margin="0,0,14,4" Clicked="OnNextBg" ToolTipProperties.Text="Next picture" />
                                 <Button Text="Test voice" Style="{StaticResource Chip}" Margin="0,0,6,4" Clicked="OnTestTts" />
                                 <Button Text="Reset chat" Style="{StaticResource Chip}" Margin="0,0,6,4" Clicked="OnReset" />
                                 <Button x:Name="ConnectButton" Text="Connect" Style="{StaticResource Chip}" Margin="0,0,6,4" Clicked="OnConnect" />
-                            </FlexLayout>
-
-                            <FlexLayout Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="End">
-                                <Button Text="◀" Style="{StaticResource Chip}" Margin="0,0,6,4" Clicked="OnPrevBg" ToolTipProperties.Text="Previous picture" />
-                                <Button Text="Random" Style="{StaticResource Chip}" Margin="0,0,6,4" Clicked="OnRandBg" ToolTipProperties.Text="Random picture" />
-                                <Button Text="▶" Style="{StaticResource Chip}" Margin="0,0,6,4" Clicked="OnNextBg" ToolTipProperties.Text="Next picture" />
                             </FlexLayout>
 
                             <FlexLayout Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="End">
