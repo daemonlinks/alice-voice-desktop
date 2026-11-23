@@ -82,37 +82,6 @@
                                     <Button x:Name="TtsPiper" Text="Piper" Style="{StaticResource Chip}" Margin="0,0,0,0" Clicked="OnEngine" ToolTipProperties.Text="Piper (local)" />
                                 </HorizontalStackLayout>
                             </Grid>
-
-                            <!-- the picture controls, then connect / disconnect, all on ONE line (Master, 2026-11-23) -->
-                            <FlexLayout Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="End">
-                                <Button Text="◀" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnPrevBg" ToolTipProperties.Text="Previous picture" />
-                                <Button Text="Random" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnRandBg" ToolTipProperties.Text="Random picture" />
-                                <Button Text="▶" Style="{StaticResource Chip}" Margin="0,0,10,2" Clicked="OnNextBg" ToolTipProperties.Text="Next picture" />
-                                <Button Text="Test voice" Style="{StaticResource Chip}" Margin="0,0,6,2" Clicked="OnTestTts" />
-                                <Button Text="Reset chat" Style="{StaticResource Chip}" Margin="0,0,6,2" Clicked="OnReset" />
-                                <Button x:Name="ConnectButton" Text="Connect" Style="{StaticResource Chip}" Margin="0,0,6,2" Clicked="OnConnect" />
-                            </FlexLayout>
-
-                            <!-- mood, reply length and the panels, all in ONE wrapping row -->
-                            <VerticalStackLayout x:Name="StyleSection" Spacing="1">
-                                <FlexLayout Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="End">
-                                    <Label Text="Mood" Style="{StaticResource Dim}" FontSize="10.5" Margin="0,0,6,2" VerticalOptions="Center"
-                                           ToolTipProperties.Text="Mood and reply length (Alice LOCAL)" />
-                                    <Button x:Name="MoodNatural" Text="natural" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnMood" />
-                                    <Button x:Name="MoodComfort" Text="comfort" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnMood" />
-                                    <Button x:Name="MoodPlayful" Text="playful" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnMood" />
-                                    <Button x:Name="MoodFlirty" Text="flirty" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnMood" />
-                                    <Button x:Name="MoodFocused" Text="focused" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnMood" />
-                                    <Button x:Name="ProfQuick" Text="Quick" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnProfile" />
-                                    <Button x:Name="ProfNatural" Text="Natural" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnProfile" />
-                                    <Button x:Name="ProfFull" Text="Full" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnProfile" />
-                                    <Button x:Name="ModeSoul" Text="SOUL" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnMode" />
-                                    <Button x:Name="HelpToggle" Text="▸ Keywords" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnToggleHelp" />
-                                    <Button x:Name="SettingsToggle" Text="▸ Settings" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnToggleSettings" />
-                                    <Button x:Name="MetricsToggle" Text="▸ Latency" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnToggleMetrics" />
-                                </FlexLayout>
-                                <Label x:Name="ProfHint" Style="{StaticResource Dim}" FontSize="10" LineBreakMode="TailTruncation" HorizontalTextAlignment="End" />
-                            </VerticalStackLayout>
                     </VerticalStackLayout>
                 </Grid>
 
@@ -120,28 +89,65 @@
                      and the three dropdowns sit directly under them, on the left. -->
                 <FlexLayout x:Name="BackendChipRow" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start" />
 
-                <FlexLayout x:Name="PickerRow" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start"
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                <FlexLayout x:Name="PickerRow" Grid.Column="0" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start"
                             ToolTipProperties.Text="Agent: who answers. Provider: which brain. Voice: how she sounds.">
                     <Picker x:Name="AgentPicker" Title="Agent" WidthRequest="180" TextColor="{StaticResource AppText}" Margin="0,0,8,2" SelectedIndexChanged="OnAgentChanged" />
                     <Picker x:Name="ProviderPicker" Title="Provider" WidthRequest="150" TextColor="{StaticResource AppText}" Margin="0,0,8,2" SelectedIndexChanged="OnProviderChanged" />
                     <Picker x:Name="VoicePicker" Title="Voice" WidthRequest="180" TextColor="{StaticResource AppText}" Margin="0,0,8,2" SelectedIndexChanged="OnVoiceChanged" />
                 </FlexLayout>
 
-                <!-- the talk line, DIRECTLY below the dropdowns on the left (Master, 2026-11-23) -->
-                <FlexLayout x:Name="TalkRow" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start">
-                    <Button x:Name="TalkButton" Text="🎤 Talk" Style="{StaticResource Chip}" FontSize="16" Padding="18,8" Margin="0,0,10,4"
+                <!-- the picture controls, then connect / disconnect, on the RIGHT of the dropdown line, just under
+                     the switches (Master, 2026-11-23: the picture controls stay left of Test voice) -->
+                <FlexLayout Grid.Column="2" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="End">
+                    <Button Text="◀" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnPrevBg" ToolTipProperties.Text="Previous picture" />
+                    <Button Text="Random" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnRandBg" ToolTipProperties.Text="Random picture" />
+                    <Button Text="▶" Style="{StaticResource Chip}" Margin="0,0,10,2" Clicked="OnNextBg" ToolTipProperties.Text="Next picture" />
+                    <Button Text="Test voice" Style="{StaticResource Chip}" Margin="0,0,6,2" Clicked="OnTestTts" />
+                    <Button Text="Reset chat" Style="{StaticResource Chip}" Margin="0,0,6,2" Clicked="OnReset" />
+                    <Button x:Name="ConnectButton" Text="Connect" Style="{StaticResource Chip}" Margin="0,0,6,2" Clicked="OnConnect" />
+                </FlexLayout>
+                </Grid>
+
+                <!-- the talk line, DIRECTLY below the dropdowns on the left, and the mood/scene chips use the
+                     empty right-hand side of that same line (Master, 2026-11-23: the right use of the space) -->
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                <FlexLayout x:Name="TalkRow" Grid.Column="0" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start">
+                    <Button x:Name="TalkButton" Text="🎤 Talk" Style="{StaticResource Chip}" FontSize="15" Padding="14,5" Margin="0,0,8,2"
                             Pressed="OnTalkPressed" Released="OnTalkReleased" Clicked="OnTalkClicked" />
-                    <Button x:Name="ModePtt" Text="PTT" Style="{StaticResource Chip}" Margin="0,0,6,2" Clicked="OnMode" ToolTipProperties.Text="Push to talk" />
-                    <Button x:Name="ModeWake" Text="Wake" Style="{StaticResource Chip}" Margin="0,0,6,2" Clicked="OnMode" ToolTipProperties.Text="Listen for the wake word" />
-                    <Button x:Name="ModeText" Text="Text" Style="{StaticResource Chip}" Margin="0,0,10,4" Clicked="OnMode" ToolTipProperties.Text="Type instead of talking" />
-                    <HorizontalStackLayout x:Name="MeterRow" Spacing="6" Margin="0,0,10,4" ToolTipProperties.Text="Microphone level">
-                        <Border WidthRequest="80" HeightRequest="6" BackgroundColor="{StaticResource AppSurface}" StrokeThickness="0" VerticalOptions="Center">
+                    <Button x:Name="ModePtt" Text="PTT" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnMode" ToolTipProperties.Text="Push to talk" />
+                    <Button x:Name="ModeWake" Text="Wake" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnMode" ToolTipProperties.Text="Listen for the wake word" />
+                    <Button x:Name="ModeText" Text="Text" Style="{StaticResource Chip}" Margin="0,0,6,2" Clicked="OnMode" ToolTipProperties.Text="Type instead of talking" />
+                    <HorizontalStackLayout x:Name="MeterRow" Spacing="6" Margin="0,0,6,2" ToolTipProperties.Text="Microphone level">
+                        <Border WidthRequest="60" HeightRequest="6" BackgroundColor="{StaticResource AppSurface}" StrokeThickness="0" VerticalOptions="Center">
                             <BoxView x:Name="VuFill" HeightRequest="6" WidthRequest="0" Color="{StaticResource AppGreen}" HorizontalOptions="Start" />
                         </Border>
                         <Label x:Name="MicTag" Text="🎤 Off" TextColor="{StaticResource AppRed}" FontSize="12" VerticalOptions="Center" />
                     </HorizontalStackLayout>
-                    <Label x:Name="StatusText" Text="Ready" Style="{StaticResource Dim}" VerticalOptions="Center" Margin="0,0,8,4" />
+                    <Label x:Name="StatusText" Text="Ready" Style="{StaticResource Dim}" VerticalOptions="Center" Margin="0,0,6,2" />
                 </FlexLayout>
+
+                <!-- mood, reply length and the panels, filling the space beside the talk line -->
+                <VerticalStackLayout x:Name="StyleSection" Grid.Column="1" WidthRequest="590" Spacing="0" HorizontalOptions="End">
+                    <FlexLayout Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="End">
+                        <Label Text="Mood" Style="{StaticResource Dim}" FontSize="10.5" Margin="0,0,6,2" VerticalOptions="Center"
+                               ToolTipProperties.Text="Mood and reply length (Alice LOCAL)" />
+                        <Button x:Name="MoodNatural" Text="natural" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnMood" />
+                        <Button x:Name="MoodComfort" Text="comfort" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnMood" />
+                        <Button x:Name="MoodPlayful" Text="playful" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnMood" />
+                        <Button x:Name="MoodFlirty" Text="flirty" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnMood" />
+                        <Button x:Name="MoodFocused" Text="focused" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnMood" />
+                        <Button x:Name="ProfQuick" Text="Quick" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnProfile" />
+                        <Button x:Name="ProfNatural" Text="Natural" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnProfile" />
+                        <Button x:Name="ProfFull" Text="Full" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnProfile" />
+                        <Button x:Name="ModeSoul" Text="SOUL" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnMode" />
+                        <Button x:Name="HelpToggle" Text="▸ Keywords" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnToggleHelp" />
+                        <Button x:Name="SettingsToggle" Text="▸ Settings" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnToggleSettings" />
+                        <Button x:Name="MetricsToggle" Text="▸ Latency" Style="{StaticResource Chip}" Margin="0,0,3,2" Clicked="OnToggleMetrics" />
+                    </FlexLayout>
+                    <Label x:Name="ProfHint" Style="{StaticResource Dim}" FontSize="10" LineBreakMode="TailTruncation" HorizontalTextAlignment="End" />
+                </VerticalStackLayout>
+                </Grid>
 
                 <Grid x:Name="TextRow" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="False">
                     <Entry x:Name="ChatInput" Placeholder="Type, or address someone: [alice_1] what do you think?" Style="{StaticResource Field}" Completed="OnSend" />
