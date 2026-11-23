@@ -64,25 +64,25 @@
 
                     <!-- right: the live active controls. Three tight rows, no scroll box, so the top stays shallow. -->
                     <VerticalStackLayout Grid.Column="1" Spacing="1" HorizontalOptions="End">
-                            <!-- the three switches and the engine, on ONE line, never wrapped (Master, 2026-11-23) -->
-                            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="14" HorizontalOptions="End">
-                                <HorizontalStackLayout Spacing="6" ToolTipProperties.Text="Speak replies aloud. Off = captions only; the speech engine is never asked.">
+                            <!-- the three switches bunched together as ONE group, then the engine (Master, 2026-11-23) -->
+                            <HorizontalStackLayout Spacing="2" HorizontalOptions="End" VerticalOptions="Center">
+                                <HorizontalStackLayout Spacing="4" VerticalOptions="Center" ToolTipProperties.Text="Speak replies aloud. Off = captions only; the speech engine is never asked.">
                                     <Label x:Name="TtsSwitchLabel" Text="🔊 Speak" FontSize="13" FontAttributes="Bold" VerticalOptions="Center" />
                                     <Switch x:Name="TtsSwitch" IsToggled="True" Toggled="OnTtsToggled" OnColor="{StaticResource AppGreen}" VerticalOptions="Center" />
                                 </HorizontalStackLayout>
-                                <HorizontalStackLayout Grid.Column="1" Spacing="6" ToolTipProperties.Text="Follow the newest turn, unless you are scrolling back.">
+                                <HorizontalStackLayout Spacing="4" VerticalOptions="Center" ToolTipProperties.Text="Follow the newest turn, unless you are scrolling back.">
                                     <Label x:Name="FollowSwitchLabel" Text="⇩ Follow" FontSize="13" FontAttributes="Bold" VerticalOptions="Center" />
                                     <Switch x:Name="FollowSwitch" IsToggled="True" Toggled="OnFollowToggled" OnColor="{StaticResource AppGreen}" VerticalOptions="Center" />
                                 </HorizontalStackLayout>
-                                <HorizontalStackLayout Grid.Column="2" Spacing="6" ToolTipProperties.Text="Open or close the log dock. Closed gives the conversation the bottom quarter back; errors always show, either way.">
+                                <HorizontalStackLayout Spacing="4" VerticalOptions="Center" ToolTipProperties.Text="Open or close the log dock. Closed gives the conversation the bottom quarter back; errors always show, either way.">
                                     <Label x:Name="LogSwitchLabel" Text="📜 Log" FontSize="13" FontAttributes="Bold" VerticalOptions="Center" />
                                     <Switch x:Name="LogSwitch" IsToggled="True" Toggled="OnLogToggled" OnColor="{StaticResource AppGreen}" VerticalOptions="Center" />
                                 </HorizontalStackLayout>
-                                <HorizontalStackLayout Grid.Column="3" Spacing="4" VerticalOptions="Center">
+                                <HorizontalStackLayout Spacing="0" Margin="10,0,0,0" VerticalOptions="Center">
                                     <Button x:Name="TtsAllTalk" Text="AllTalk" Style="{StaticResource Chip}" Margin="0,0,4,0" Clicked="OnEngine" ToolTipProperties.Text="AllTalk (local)" />
                                     <Button x:Name="TtsPiper" Text="Piper" Style="{StaticResource Chip}" Margin="0,0,0,0" Clicked="OnEngine" ToolTipProperties.Text="Piper (local)" />
                                 </HorizontalStackLayout>
-                            </Grid>
+                            </HorizontalStackLayout>
                     </VerticalStackLayout>
                 </Grid>
 
