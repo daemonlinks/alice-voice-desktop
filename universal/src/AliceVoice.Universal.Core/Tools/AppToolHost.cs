@@ -154,6 +154,9 @@ public sealed class AppToolHost
             // A video is handed to the device's own player, so the picture kinds list does not gate it.
             if (check.Ok && mapped == SurfaceKind.Image && !_images.Settings.AllowedKinds.Contains(check.Kind))
                 return Error("unsupported type");
+            // Keep the RESOLVED path, not the name he called it: the window loads the surface from what is
+            // stored here, so a bare name is looked for beside the exe and refuses to paint (2026-11-23).
+            if (check.Ok && !string.IsNullOrEmpty(check.FullPath)) src = check.FullPath;
         }
 
         var options = new List<SurfaceOption>();
