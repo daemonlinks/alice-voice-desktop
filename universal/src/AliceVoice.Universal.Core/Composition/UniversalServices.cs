@@ -8,6 +8,7 @@ using AliceVoice.Core.Voice;
 using AliceVoice.Universal.Audio;
 using AliceVoice.Universal.Bridge;
 using AliceVoice.Universal.Host;
+using AliceVoice.Universal.Interaction;
 using AliceVoice.Universal.Media;
 using AliceVoice.Universal.Session;
 using AliceVoice.Universal.Tools;
@@ -56,7 +57,10 @@ public static class UniversalServices
         services.AddSingleton<ISoulGateway>(sp => new LocalSoulGateway(sp.GetRequiredService<SoulStore>()));
         services.AddSingleton<SharedTranscript>();
         services.AddSingleton<IAliceConversation>(sp => sp.GetRequiredService<SharedTranscript>());
-        services.AddSingleton<AppToolHost>(sp => new AppToolHost(sp.GetRequiredService<VoiceSession>().Images));
+        services.AddSingleton<SharedSurface>();
+        services.AddSingleton<AppToolHost>(sp => new AppToolHost(
+            sp.GetRequiredService<VoiceSession>().Images,
+            sp.GetRequiredService<SharedSurface>()));
         services.AddSingleton<IVoiceBackend>(sp =>
         {
             var inner = new AliceLocalBackend(options);
@@ -83,7 +87,8 @@ public static class UniversalServices
                 () => sp.GetServices<IVoiceBackend>().First(b => b is RecordingAliceLocalBackend),
                 transcript: sp.GetRequiredService<SharedTranscript>(),
                 allowUnsafeBind: host.AllowUnsafeBridgeBind,
-                media: MediaSettings.Load(host.SettingsFile)));
+                media: MediaSettings.Load(host.SettingsFile),
+                surface: sp.GetRequiredService<SharedSurface>()));
         }
     }
 

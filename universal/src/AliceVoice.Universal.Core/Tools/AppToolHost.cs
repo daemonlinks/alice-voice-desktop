@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using AliceVoice.Core.Voice;
+using AliceVoice.Universal.Interaction;
 using AliceVoice.Universal.Media;
 
 namespace AliceVoice.Universal.Tools;
@@ -15,14 +16,26 @@ namespace AliceVoice.Universal.Tools;
 public sealed class AppToolHost
 {
     public const string ListPictures = "gui_list_pictures";
+    public const string Surface = "gui_surface";
+    public const string ClearSurface = "gui_surface_clear";
 
     private readonly ImageDisplay _images;
 
-    public AppToolHost(ImageDisplay images) => _images = images;
+    public AppToolHost(ImageDisplay images, SharedSurface? surface = null)
+    {
+        _images = images;
+        SurfaceArea = surface ?? new SharedSurface();
+        _surface = SurfaceArea;
+    }
+
+    private readonly SharedSurface _surface;
+
+    /// <summary>The middle of the conversation screen. The window paints this instance.</summary>
+    public SharedSurface SurfaceArea { get; }
 
     /// <summary>The tools this host owns. Anything else falls through to <c>alice_local_tools.py</c> untouched.</summary>
     public static bool Owns(string? tool)
-        => tool is ListPictures or DisplayCommands.ShowImage or DisplayCommands.ClearImage;
+        => tool is ListPictures or DisplayCommands.ShowImage or DisplayCommands.ClearImage or Surface or ClearSurface;
 
     /// <summary>Null means "not mine" - the caller runs its own path for that tool.</summary>
     public Task<string?> RunAsync(string tool, string argsJson, CancellationToken ct = default)
@@ -37,6 +50,8 @@ public sealed class AppToolHost
             ListPictures => List(args),
             DisplayCommands.ShowImage => Show(args),
             DisplayCommands.ClearImage => Clear(args),
+            Surface => ShowSurface(args),
+            ClearSurface => ClearSurfaceArea(),
             _ => Error("unknown tool: " + tool),
         };
     }
@@ -104,6 +119,80 @@ public sealed class AppToolHost
         _images.Submit(new ToolCommand(DisplayCommands.ClearImage, args.ToJsonString()));
         return new JsonObject { ["ok"] = true, ["cleared"] = wasShowing }.ToJsonString();
     }
+
+    /// <summary>
+    /// Put something in the middle of the conversation screen - the shared place between him and the
+    /// agent. Kinds: image, video, question, status, meters. The picture rules are the same ones
+    /// <c>gui_show_image</c> applies (allowed roots, or https when the settings allow it), so a
+    /// surface can never show what a picture may not.
+    /// </summary>
+    private string ShowSurface(JsonObject args)
+    {
+        var kind = (Text(args, "kind") ?? "").Trim().ToLowerInvariant();
+        var mapped = kind switch
+        {
+            "image" or "picture" => SurfaceKind.Image,
+            "video" => SurfaceKind.Video,
+            "question" or "choice" => SurfaceKind.Question,
+            "status" or "mood" or "feeling" => SurfaceKind.Status,
+            "meters" or "meter" => SurfaceKind.Meters,
+            _ => SurfaceKind.None,
+        };
+        if (mapped == SurfaceKind.None)
+            return Error("bad args: kind (image|video|question|status|meters)", hint: true);
+
+        var src = (Text(args, "src") ?? Text(args, "file") ?? Text(args, "url"))?.Trim() ?? "";
+        if (mapped is SurfaceKind.Image or SurfaceKind.Video && string.IsNullOrEmpty(src))
+            return Error("bad args: src");
+
+        if (mapped is SurfaceKind.Image or SurfaceKind.Video && _images.Share is { } share && !string.IsNullOrEmpty(src))
+        {
+            var isUrl = src.Contains("://", StringComparison.Ordinal);
+            var check = !isUrl && Path.IsPathFullyQualified(src) ? share.Validate(src) : share.ResolveName(src);
+            if (!check.Ok && !(isUrl && _images.Settings.AllowHttps))
+                return Error(check.Error ?? "not a file", hint: !Path.IsPathFullyQualified(src));
+            // A video is handed to the device's own player, so the picture kinds list does not gate it.
+            if (check.Ok && mapped == SurfaceKind.Image && !_images.Settings.AllowedKinds.Contains(check.Kind))
+                return Error("unsupported type");
+        }
+
+        var options = new List<SurfaceOption>();
+        if (args["options"] is JsonArray array)
+        {
+            foreach (var node in array)
+            {
+                if (node is null) continue;
+                var text = node is JsonObject obj ? (Text(obj, "text") ?? Text(obj, "label")) : node.ToString();
+                double? value = null;
+                if (node is JsonObject valued && valued["value"] is { } v && double.TryParse(v.ToString(), out var parsed)) value = parsed;
+                if (!string.IsNullOrWhiteSpace(text)) options.Add(new SurfaceOption(text.Trim(), value));
+            }
+        }
+        if (mapped == SurfaceKind.Question && options.Count == 0)
+            return Error("bad args: options (a question needs answers he can pick)", hint: true);
+
+        _surface.Show(mapped, Text(args, "title") ?? "", Text(args, "body") ?? Text(args, "caption") ?? "", src,
+            options,
+            Number(args, "love"), Number(args, "orgasm"),
+            Text(args, "mood") ?? "", Text(args, "by") ?? "");
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["kind"] = kind,
+            ["options"] = options.Count,
+            ["note"] = "the app is painting it in the middle of the conversation",
+        }.ToJsonString();
+    }
+
+    private string ClearSurfaceArea()
+    {
+        var had = _surface.HasContent;
+        _surface.Clear();
+        return new JsonObject { ["ok"] = true, ["cleared"] = had }.ToJsonString();
+    }
+
+    private static double? Number(JsonObject args, string key)
+        => args[key] is { } node && double.TryParse(node.ToString(), out var value) ? value : null;
 
     private string Error(string error, bool hint = false)
     {

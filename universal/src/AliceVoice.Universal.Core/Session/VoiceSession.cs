@@ -85,6 +85,7 @@ public sealed class VoiceSession : IAsyncDisposable
     private DateTime _nextConversationPoll;
     private Action? _stopSpeech;
     private readonly BridgeClientSettings? _bridgeClient;
+    private readonly UiPreferences _prefs;
     private readonly HashSet<string> _ignoredTools = new(StringComparer.Ordinal);
     private bool _ownsImages;
     private bool _turnShowedPicture;
@@ -109,6 +110,9 @@ public sealed class VoiceSession : IAsyncDisposable
         _ownsImages = images is null;
         Images = images ?? CreateImages(host, bridgeClient, s => { AddLog(s); Touch(); }, clock);
         Images.Changed += Touch;
+        _prefs = UiPreferences.Load(host.SettingsFile);
+        SpeakReplies = _prefs.SpeakReplies;
+        FollowConversation = _prefs.FollowConversation;
         if (_conversation is not null) _conversation.Changed += () => ApplySharedSnapshot();
         _clock = clock ?? (() => DateTime.UtcNow);
         _local = localClock ?? (() => DateTime.Now);
@@ -190,6 +194,41 @@ public sealed class VoiceSession : IAsyncDisposable
     public string VoiceLabel { get; private set; } = "—";
     public string ConnectionLabel { get; private set; } = "offline";
     public string SettingsLine { get; private set; } = "";
+
+    /// <summary>Whether replies are spoken aloud. Off = captions only, and nothing is sent to the engine.</summary>
+    public bool SpeakReplies { get; private set; } = true;
+
+    /// <summary>Whether the conversation view follows the newest turn. Off = it stays where he put it.</summary>
+    public bool FollowConversation { get; private set; } = true;
+
+    /// <summary>The TTS switch, top right. Persisted, so it survives a restart.</summary>
+    public void SetSpeakReplies(bool on)
+    {
+        if (SpeakReplies == on) return;
+        SpeakReplies = on;
+        AddLog(on ? "Speech on - replies are spoken" : "Speech off - replies are captions only");
+        _prefs.Save(SpeakReplies, FollowConversation);
+        Touch();
+    }
+
+    /// <summary>The follow switch, beside it: does the view chase the newest turn?</summary>
+    public void SetFollowConversation(bool on)
+    {
+        if (FollowConversation == on) return;
+        FollowConversation = on;
+        AddLog(on ? "Follow on - the view will chase the newest turn" : "Follow off - the view stays where you put it");
+        _prefs.Save(SpeakReplies, FollowConversation);
+        Touch();
+    }
+
+    /// <summary>A surface picture that would not load is said out loud in the app log, never swallowed.</summary>
+    public void NoteSurfaceImageFailed(string src, string reason)
+    {
+        AddLog($"Shared surface: could not load {src} - {reason}");
+        ShowError($"Surface picture failed: {reason}");
+        Touch();
+    }
+
     public bool ShowBridgeEditor => _bridgeClient is not null;
     public string BridgeHost => _bridgeClient?.Host ?? "";
     public string BridgePort => _bridgeClient is null ? "" : _bridgeClient.Port.ToString();
@@ -800,7 +839,13 @@ public sealed class VoiceSession : IAsyncDisposable
         LlmLamp = StageLamp.Green;
 
         long ttsMs = 0;
-        if (!string.IsNullOrWhiteSpace(reply))
+        if (!string.IsNullOrWhiteSpace(reply) && !SpeakReplies)
+        {
+            // The switch is off: the words are on screen, and the engine is never asked.
+            AddLog("Speech off: the reply is on screen, not spoken");
+            SetActivity("Ready");
+        }
+        else if (!string.IsNullOrWhiteSpace(reply))
         {
             StatusText = "Speaking…";
             SetActivity("Speaking…", target);

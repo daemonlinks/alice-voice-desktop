@@ -9,6 +9,7 @@ using AliceVoice.Core.Stt;
 using AliceVoice.Core.Voice;
 using AliceVoice.Universal.Audio;
 using AliceVoice.Universal.Host;
+using AliceVoice.Universal.Interaction;
 using AliceVoice.Universal.Media;
 using AliceVoice.Universal.Tools;
 using AliceVoice.Universal.Voice;
@@ -51,6 +52,9 @@ public sealed class BeastBridge : IAsyncDisposable
     /// <summary>The service's own tools - the same implementation App U's local leg calls.</summary>
     private readonly AppToolHost _tools;
 
+    /// <summary>The shared middle of the conversation screen, served over /v1/app/surface.</summary>
+    private readonly SharedSurface _surface;
+
     private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
 
     private HttpListener? _listener;
@@ -61,7 +65,7 @@ public sealed class BeastBridge : IAsyncDisposable
 
     public BeastBridge(AliceVoiceOptions options, ISttClient stt, ISoulGateway soul, IPiperSynth piper, string host, int port, SoulReloadHub? hub = null,
         Func<IVoiceBackend>? localFactory = null, Func<IFleetChat>? fleetFactory = null, SharedTranscript? transcript = null, bool allowUnsafeBind = false,
-        MediaSettings? media = null)
+        MediaSettings? media = null, SharedSurface? surface = null)
     {
         _media = media ?? MediaSettings.Default;
         _share = new MediaShare(_media);
@@ -71,7 +75,7 @@ public sealed class BeastBridge : IAsyncDisposable
         // still paints its own copy until it is switched to read this surface; that is the one
         // follow-up, and it is deliberately not half-done here.
         _images = new ImageDisplay(_media, _share, null, note => Log.Information("App display: {Note}", note));
-        _tools = new AppToolHost(_images);
+        _tools = new AppToolHost(_images, _surface = surface ?? new SharedSurface());
         _options = options;
         _stt = stt;
         _soul = soul;
@@ -161,6 +165,11 @@ public sealed class BeastBridge : IAsyncDisposable
             await WriteJson(ctx.Response, 200, Node(listed ?? "{}"));
             return;
         }
+        if (method == "GET" && path == "/v1/app/surface")
+        {
+            await WriteJson(ctx.Response, 200, Node(_surface.ToJson().ToJsonString()));
+            return;
+        }
         if (method == "POST" && path == "/v1/app/display")
         {
             var body = Encoding.UTF8.GetString(await ReadBody(ctx.Request, MaxBodyBytes, ct));
@@ -178,7 +187,7 @@ public sealed class BeastBridge : IAsyncDisposable
                 await WriteJson(ctx.Response, 400, Node(new JsonObject
                 {
                     ["error"] = "not a display tool: " + call.Value.Tool,
-                    ["tools"] = new JsonArray("gui_list_pictures", "gui_show_image", "gui_image_clear"),
+                    ["tools"] = new JsonArray("gui_list_pictures", "gui_show_image", "gui_image_clear", "gui_surface", "gui_surface_clear"),
                 }.ToJsonString()));
                 return;
             }

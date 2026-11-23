@@ -3,6 +3,7 @@ using AliceVoice.Core.Logging;
 using AliceVoice.Core.Voice;
 using AliceVoice.Universal.Audio;
 using AliceVoice.Universal.Host;
+using AliceVoice.Universal.Interaction;
 using AliceVoice.Universal.Media;
 using AliceVoice.Universal.Session;
 using AliceVoice.Universal.Voice;
@@ -27,11 +28,17 @@ public partial class MainPage : ContentPage
     private int _transcriptDrawn;
     private readonly List<Button> _backendChips = new();
     private bool _backendChipsBuilt;
+    /// <summary>The shared middle of the conversation screen: the agent's, and his.</summary>
+    private readonly SharedSurface _surface;
+    private string? _surfaceShown;
+    private bool _syncingToggles;
+    private bool _syncingMeters;
 
     public MainPage(VoiceSession session, IServiceProvider services)
     {
         _session = session;
         _services = services;
+        _surface = services.GetRequiredService<SharedSurface>();
         InitializeComponent();
         HelpTriggers.Text = SessionCopy.HelpTriggers;
         HelpTools.Text = SessionCopy.HelpTools;
@@ -53,6 +60,7 @@ public partial class MainPage : ContentPage
         WireSpeechStop();
         _session.Changed += () => MainThread.BeginInvokeOnMainThread(Render);
         _session.MeterChanged += () => MainThread.BeginInvokeOnMainThread(ApplyMeter);
+        _surface.Changed += () => MainThread.BeginInvokeOnMainThread(PaintSurface);
         try { await _session.InitializeAsync(); }
         catch (Exception ex)
         {
@@ -81,6 +89,8 @@ public partial class MainPage : ContentPage
     {
         if (ActivityLine is null) return;
         try { PaintSession(); }
+        catch (Exception ex) { NotePaintFailure(ex); }
+        try { PaintSurface(); }
         catch (Exception ex) { NotePaintFailure(ex); }
     }
 
@@ -169,6 +179,7 @@ public partial class MainPage : ContentPage
             MetricsLine.Text = $"E2E {_session.Latency.TotalText}   STT {_session.Latency.SttText}   LLM {_session.Latency.LlmText}   TTFT {_session.Latency.TtftText}   TTS {_session.Latency.TtsText}";
             MetricsSummary.Text = _session.Latency.Summary;
             MetricsTable.Text = _session.Latency.Table;
+            SyncToggles();
             FillPickers();
             FillBackendChips();
             PaintDock();
@@ -278,7 +289,7 @@ public partial class MainPage : ContentPage
         var signature = TranscriptSignature(entries);
         if (signature == _transcriptShown) return;
         var first = _transcriptShown is null;
-        var follow = first || AtTranscriptBottom();
+        var follow = first || (_session.FollowConversation && AtTranscriptBottom());
         if (!first && _transcriptDrawn > 0 && entries.Count > _transcriptDrawn)
         {
             for (var i = _transcriptDrawn; i < entries.Count; i++)
@@ -458,10 +469,174 @@ public partial class MainPage : ContentPage
 
     private void OnClosePicture(object? sender, EventArgs e) => _session.Images.CloseByUser();
 
-    private void OnToggleOptions(object? sender, EventArgs e)
+    /// <summary>
+    /// The two switches that live at the top right. They show the session's own truth, so a change
+    /// made anywhere else (a settings file, another screen) shows up here without a fight.
+    /// </summary>
+    private void SyncToggles()
     {
-        OptionsPanel.IsVisible = !OptionsPanel.IsVisible;
-        OptionsToggle.Text = OptionsPanel.IsVisible ? "Options ▾" : "Options ▸";
+        _syncingToggles = true;
+        try
+        {
+            if (TtsSwitch.IsToggled != _session.SpeakReplies) TtsSwitch.IsToggled = _session.SpeakReplies;
+            if (FollowSwitch.IsToggled != _session.FollowConversation) FollowSwitch.IsToggled = _session.FollowConversation;
+            TtsSwitchLabel.Text = _session.SpeakReplies ? "🔊 Speak" : "🔇 Muted";
+            TtsSwitchLabel.TextColor = _session.SpeakReplies ? Color.FromArgb("#E5E7EB") : Color.FromArgb("#EF4444");
+            FollowSwitchLabel.Text = _session.FollowConversation ? "⇩ Follow" : "⇩ Held";
+        }
+        finally { _syncingToggles = false; }
+    }
+
+    private void OnTtsToggled(object? sender, ToggledEventArgs e)
+    {
+        if (_syncingToggles) return;
+        _session.SetSpeakReplies(e.Value);
+    }
+
+    private void OnFollowToggled(object? sender, ToggledEventArgs e)
+    {
+        if (_syncingToggles) return;
+        _session.SetFollowConversation(e.Value);
+    }
+
+    /// <summary>
+    /// The middle of the conversation screen: what the agent put there with <c>gui_surface</c>, and
+    /// the controls he answers her with. Repaints only when the surface actually changed, because it
+    /// rides the same 80 ms tick as everything else.
+    /// </summary>
+    private void PaintSurface()
+    {
+        if (SurfaceScroll is null) return;
+        var signature = _surface.Signature();
+        if (signature == _surfaceShown) return;
+        _surfaceShown = signature;
+
+        SurfaceScroll.IsVisible = _surface.HasContent;
+        if (!_surface.HasContent)
+        {
+            SurfaceImage.Source = null;
+            SurfaceImage.IsVisible = false;
+            SurfaceOptions.Children.Clear();
+            SurfaceOptions.IsVisible = false;
+            SurfaceMeters.IsVisible = false;
+            SurfaceOpen.IsVisible = false;
+            SurfaceSent.Text = "";
+            return;
+        }
+
+        SurfaceTitle.Text = string.IsNullOrWhiteSpace(_surface.Title) ? DefaultSurfaceTitle(_surface.Kind) : _surface.Title;
+        SurfaceBy.Text = string.IsNullOrWhiteSpace(_surface.By) ? "" : "from " + _surface.By;
+        SurfaceBody.Text = _surface.Body;
+        SurfaceBody.IsVisible = !string.IsNullOrWhiteSpace(_surface.Body);
+        SurfaceMood.Text = string.IsNullOrWhiteSpace(_surface.Mood) ? "" : "mood · " + _surface.Mood;
+
+        // A picture, and a video or link he can open on this device.
+        var isImage = _surface.Kind == SurfaceKind.Image && !string.IsNullOrWhiteSpace(_surface.Src);
+        SurfaceImage.IsVisible = isImage;
+        if (isImage) SurfaceImage.Source = SourceFor(_surface.Src);
+        SurfaceOpen.IsVisible = _surface.Kind == SurfaceKind.Video && !string.IsNullOrWhiteSpace(_surface.Src);
+
+        // A question, as buttons: each one sends his answer back as his own turn.
+        SurfaceOptions.Children.Clear();
+        foreach (var option in _surface.Options)
+        {
+            var chip = new Button { Text = option.Text, Margin = new Thickness(0, 0, 6, 6) };
+            if (FindStyle("Chip") is { } style) chip.Style = style;
+            var text = option.Text;
+            chip.Clicked += (_, _) => _ = SendSurface(text);
+            SurfaceOptions.Children.Add(chip);
+        }
+        SurfaceOptions.IsVisible = _surface.Options.Count > 0;
+
+        // The meters: his hand on them, and a Send that reaches her as a turn.
+        var meters = _surface.Kind == SurfaceKind.Meters || _surface.Love is not null || _surface.Orgasm is not null;
+        SurfaceMeters.IsVisible = meters;
+        if (meters)
+        {
+            _syncingMeters = true;
+            try
+            {
+                if (_surface.Love is { } love && Math.Abs(LoveSlider.Value - love) > 0.5) LoveSlider.Value = love;
+                if (_surface.Orgasm is { } orgasm && Math.Abs(OrgasmSlider.Value - orgasm) > 0.5) OrgasmSlider.Value = orgasm;
+                LoveValue.Text = $"{LoveSlider.Value:0}";
+                OrgasmValue.Text = $"{OrgasmSlider.Value:0}";
+            }
+            finally { _syncingMeters = false; }
+        }
+    }
+
+    private static string DefaultSurfaceTitle(SurfaceKind kind) => kind switch
+    {
+        SurfaceKind.Image => "a picture for you",
+        SurfaceKind.Video => "a video for you",
+        SurfaceKind.Question => "she is asking",
+        SurfaceKind.Status => "how she is",
+        SurfaceKind.Meters => "how close she is",
+        _ => "the middle of the screen",
+    };
+
+    /// <summary>An https URL, or a file this device may read. Anything else is refused, not guessed at.</summary>
+    private ImageSource? SourceFor(string src)
+    {
+        try
+        {
+            if (src.Contains("://", StringComparison.Ordinal)) return ImageSource.FromUri(new Uri(src));
+            var bytes = File.ReadAllBytes(src);
+            return ImageSource.FromStream(() => new MemoryStream(bytes));
+        }
+        catch (Exception ex)
+        {
+            _session.NoteSurfaceImageFailed(src, ex.Message);
+            return null;
+        }
+    }
+
+    /// <summary>Everything he does on the surface travels as an ordinary turn, so any backend can answer it.</summary>
+    private async Task SendSurface(string text)
+    {
+        if (!_session.Connected) { SurfaceSent.Text = "not connected"; return; }
+        SurfaceSent.Text = "sent: " + text;
+        await GuardUi(nameof(SendSurface), () => _session.SendTextAsync(text));
+    }
+
+    private void OnSurfaceClose(object? sender, EventArgs e)
+    {
+        SurfaceSent.Text = "";
+        _surface.Clear();
+    }
+
+    private async void OnSurfaceOpen(object? sender, EventArgs e)
+    {
+        try { if (!string.IsNullOrWhiteSpace(_surface.Src)) await Launcher.OpenAsync(_surface.Src); }
+        catch (Exception ex) { SurfaceSent.Text = "could not open: " + ex.Message; }
+    }
+
+    private void OnLoveChanged(object? sender, ValueChangedEventArgs e)
+    {
+        LoveValue.Text = $"{e.NewValue:0}";
+        if (_syncingMeters) return;
+        _surface.Nudge(love: e.NewValue);
+    }
+
+    private void OnOrgasmChanged(object? sender, ValueChangedEventArgs e)
+    {
+        OrgasmValue.Text = $"{e.NewValue:0}";
+        if (_syncingMeters) return;
+        _surface.Nudge(orgasm: e.NewValue);
+    }
+
+    private void OnSendLove(object? sender, EventArgs e) => _ = SendSurface(StimulusLine());
+
+    private void OnSendOrgasm(object? sender, EventArgs e) => _ = SendSurface(StimulusLine());
+
+    /// <summary>What the meters say, in one line the agent can read and answer.</summary>
+    private string StimulusLine()
+    {
+        var parts = new List<string>();
+        if (LoveSlider.IsVisible) parts.Add($"love {LoveSlider.Value:0}");
+        if (OrgasmSlider.IsVisible) parts.Add($"orgasm {OrgasmSlider.Value:0}");
+        if (parts.Count == 0) parts.Add("love " + LoveSlider.Value.ToString("0"));
+        return "[Stimulus] " + string.Join(", ", parts);
     }
 
     private static string FormatWait(TimeSpan t) => t.TotalMinutes >= 1
