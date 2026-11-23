@@ -6,10 +6,12 @@
              BackgroundColor="{StaticResource AppBg}"
              Title="Alice Voice App U">
     <!--
-      Layout C (no menu, the shared surface is the RIGHT HALF), the same on Windows and Android:
-        top left   - the identity and the live status (agent, presence, activity, mic, errors)
-        top right  - the LIVE ACTIVE CONTROLS: the TTS switch, the follow switch and the error switch,
-                     then the talk controls, the pickers, the mood, the scene and the three panels.
+      Layout D (no menu, the shared surface is the RIGHT HALF), the same on Windows and Android:
+        top left   - the identity and the live status (agent, presence, activity, mic)
+        top right  - the LIVE ACTIVE CONTROLS: the three switches on ONE line, Connect/Disconnect, the
+                     picture controls (previous / random / next) directly beneath it, then the talk
+                     controls, the engine, the mood and the scene.
+        full width - the agent name buttons, then the three dropdowns (agent, provider, voice) under them.
         middle     - the conversation takes the LEFT HALF; the SHARED SURFACE takes the RIGHT HALF.
                      Ours is always on screen, empty or full: a picture, an HTML5 video, a question,
                      how she feels, or the meters he can put his hand on - and the place he answers back.
@@ -53,31 +55,40 @@
                                 <Button Grid.Column="1" Text="Dismiss" Style="{StaticResource Chip}" Clicked="OnDismissError" />
                             </Grid>
                         </Border>
-                        <Label x:Name="SpeakerGuide" Style="{StaticResource Dim}" FontSize="11" LineBreakMode="WordWrap"
+                        <Label x:Name="SpeakerGuide" Style="{StaticResource Dim}" LineBreakMode="WordWrap"
                                Text="Who is speaking is marked on every line. Address anyone: [alice_1] what do you think?" />
-                        <!-- Backend chips: Alice LOCAL on Ollama, then every fleet member. One click each. -->
-                        <FlexLayout x:Name="BackendChipRow" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start" />
                     </VerticalStackLayout>
 
                     <!-- right: the live active controls. The three switches first, because he asked for them. -->
                     <ScrollView Grid.Column="1" WidthRequest="600" MaximumHeightRequest="360" HorizontalOptions="End">
                         <VerticalStackLayout Spacing="5">
-                            <FlexLayout Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="End">
-                                <HorizontalStackLayout Spacing="6" Margin="0,0,12,4" ToolTipProperties.Text="Speak replies aloud. Off = captions only; the speech engine is never asked.">
+                            <!-- the three switches, on ONE line, never wrapped (Master, 2026-11-23) -->
+                            <Grid ColumnDefinitions="Auto,Auto,Auto" ColumnSpacing="16" HorizontalOptions="End">
+                                <HorizontalStackLayout Spacing="6" ToolTipProperties.Text="Speak replies aloud. Off = captions only; the speech engine is never asked.">
                                     <Label x:Name="TtsSwitchLabel" Text="🔊 Speak" FontSize="13" FontAttributes="Bold" VerticalOptions="Center" />
                                     <Switch x:Name="TtsSwitch" IsToggled="True" Toggled="OnTtsToggled" OnColor="{StaticResource AppGreen}" VerticalOptions="Center" />
                                 </HorizontalStackLayout>
-                                <HorizontalStackLayout Spacing="6" Margin="0,0,12,4" ToolTipProperties.Text="Follow the newest turn, unless you are reading back.">
+                                <HorizontalStackLayout Grid.Column="1" Spacing="6" ToolTipProperties.Text="Follow the newest turn, unless you are scrolling back.">
                                     <Label x:Name="FollowSwitchLabel" Text="⇩ Follow" FontSize="13" FontAttributes="Bold" VerticalOptions="Center" />
                                     <Switch x:Name="FollowSwitch" IsToggled="True" Toggled="OnFollowToggled" OnColor="{StaticResource AppGreen}" VerticalOptions="Center" />
                                 </HorizontalStackLayout>
-                                <HorizontalStackLayout Spacing="6" Margin="0,0,12,4" ToolTipProperties.Text="Open or close the log dock. Closed gives the conversation the bottom quarter back; errors always show, either way.">
+                                <HorizontalStackLayout Grid.Column="2" Spacing="6" ToolTipProperties.Text="Open or close the log dock. Closed gives the conversation the bottom quarter back; errors always show, either way.">
                                     <Label x:Name="LogSwitchLabel" Text="📜 Log" FontSize="13" FontAttributes="Bold" VerticalOptions="Center" />
                                     <Switch x:Name="LogSwitch" IsToggled="True" Toggled="OnLogToggled" OnColor="{StaticResource AppGreen}" VerticalOptions="Center" />
                                 </HorizontalStackLayout>
+                            </Grid>
+
+                            <!-- connect / disconnect, then the picture controls right under it -->
+                            <FlexLayout Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="End">
                                 <Button Text="Test voice" Style="{StaticResource Chip}" Margin="0,0,6,4" Clicked="OnTestTts" />
                                 <Button Text="Reset chat" Style="{StaticResource Chip}" Margin="0,0,6,4" Clicked="OnReset" />
                                 <Button x:Name="ConnectButton" Text="Connect" Style="{StaticResource Chip}" Margin="0,0,6,4" Clicked="OnConnect" />
+                            </FlexLayout>
+
+                            <FlexLayout Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="End">
+                                <Button Text="◀" Style="{StaticResource Chip}" Margin="0,0,6,4" Clicked="OnPrevBg" ToolTipProperties.Text="Previous picture" />
+                                <Button Text="Random" Style="{StaticResource Chip}" Margin="0,0,6,4" Clicked="OnRandBg" ToolTipProperties.Text="Random picture" />
+                                <Button Text="▶" Style="{StaticResource Chip}" Margin="0,0,6,4" Clicked="OnNextBg" ToolTipProperties.Text="Next picture" />
                             </FlexLayout>
 
                             <FlexLayout Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="End">
@@ -109,17 +120,8 @@
                             </FlexLayout>
 
                             <FlexLayout Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="End">
-                                <Picker x:Name="AgentPicker" Title="Agent" WidthRequest="160" TextColor="{StaticResource AppText}" Margin="0,0,8,6" SelectedIndexChanged="OnAgentChanged" />
-                                <Picker x:Name="ProviderPicker" Title="Provider" WidthRequest="130" TextColor="{StaticResource AppText}" Margin="0,0,8,6" SelectedIndexChanged="OnProviderChanged" />
-                                <Picker x:Name="VoicePicker" Title="Voice" WidthRequest="160" TextColor="{StaticResource AppText}" Margin="0,0,8,6" SelectedIndexChanged="OnVoiceChanged" />
-                            </FlexLayout>
-
-                            <FlexLayout Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="End">
                                 <Button x:Name="TtsAllTalk" Text="AllTalk (local)" Style="{StaticResource Chip}" Margin="0,0,6,6" Clicked="OnEngine" />
                                 <Button x:Name="TtsPiper" Text="Piper (local)" Style="{StaticResource Chip}" Margin="0,0,6,6" Clicked="OnEngine" />
-                                <Button Text="◀" Style="{StaticResource Chip}" Margin="0,0,6,6" Clicked="OnPrevBg" ToolTipProperties.Text="Previous backdrop" />
-                                <Button Text="Random" Style="{StaticResource Chip}" Margin="0,0,6,6" Clicked="OnRandBg" ToolTipProperties.Text="Random backdrop" />
-                                <Button Text="▶" Style="{StaticResource Chip}" Margin="0,0,6,6" Clicked="OnNextBg" ToolTipProperties.Text="Next backdrop" />
                             </FlexLayout>
 
                             <VerticalStackLayout x:Name="StyleSection" Spacing="4">
@@ -145,6 +147,17 @@
                         </VerticalStackLayout>
                     </ScrollView>
                 </Grid>
+
+                <!-- the agent name buttons take the WHOLE WIDTH of the screen (Master, 2026-11-23),
+                     and the three dropdowns sit directly under them, on the left. -->
+                <FlexLayout x:Name="BackendChipRow" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start" />
+
+                <FlexLayout x:Name="PickerRow" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start"
+                            ToolTipProperties.Text="Agent: who answers. Provider: which brain. Voice: how she sounds.">
+                    <Picker x:Name="AgentPicker" Title="Agent" WidthRequest="180" TextColor="{StaticResource AppText}" Margin="0,0,8,4" SelectedIndexChanged="OnAgentChanged" />
+                    <Picker x:Name="ProviderPicker" Title="Provider" WidthRequest="150" TextColor="{StaticResource AppText}" Margin="0,0,8,4" SelectedIndexChanged="OnProviderChanged" />
+                    <Picker x:Name="VoicePicker" Title="Voice" WidthRequest="180" TextColor="{StaticResource AppText}" Margin="0,0,8,4" SelectedIndexChanged="OnVoiceChanged" />
+                </FlexLayout>
 
                 <!-- the panels the three toggles open: full width, so they read properly -->
                 <VerticalStackLayout x:Name="HelpPanel" IsVisible="False" Spacing="4" Padding="0,6,0,0">
