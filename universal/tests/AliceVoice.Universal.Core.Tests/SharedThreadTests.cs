@@ -74,16 +74,16 @@ public class SharedThreadTests
     }
 
     [Fact]
-    public void The_error_switch_is_remembered_across_restarts()
+    public void The_log_switch_is_remembered_across_restarts()
     {
         var file = Path.Combine(Path.GetTempPath(), "appu-prefs-" + Guid.NewGuid().ToString("N") + ".json");
         try
         {
             var prefs = new UiPreferences(file);
-            prefs.Save(speakReplies: true, followConversation: false, showErrors: false);
+            prefs.Save(speakReplies: true, followConversation: false, showLog: false);
 
             var back = UiPreferences.Load(file);
-            Assert.False(back.ShowErrors);
+            Assert.False(back.ShowLog);
             Assert.False(back.FollowConversation);
             Assert.True(back.SpeakReplies);
         }
@@ -91,10 +91,10 @@ public class SharedThreadTests
     }
 
     [Fact]
-    public void An_older_settings_file_still_starts_with_the_banner_on()
+    public void An_older_settings_file_still_opens_with_the_log_showing()
     {
-        // The file that was there before this switch existed has no ShowErrors key. Missing means on:
-        // a silent app is a choice he makes, never something an upgrade does to him.
+        // The file that was there before this switch existed has no ShowLog key. Missing means open: a
+        // closed log is a choice he makes, never something an upgrade does to him.
         var file = Path.Combine(Path.GetTempPath(), "appu-prefs-old-" + Guid.NewGuid().ToString("N") + ".json");
         try
         {
@@ -104,8 +104,27 @@ public class SharedThreadTests
                 ["FollowConversation"] = true,
             }.ToJsonString());
 
-            Assert.True(UiPreferences.Load(file).ShowErrors);
+            Assert.True(UiPreferences.Load(file).ShowLog);
         }
         finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void The_log_chases_the_newest_line_only_while_he_is_at_the_end_of_it()
+    {
+        // Master, 2026-11-23: "I always want to see the latest log entry unless I am looking back in
+        // the log." 2000px of log, 600px of window: the end is at 1400.
+        Assert.Equal(1400, LogFollow.MaxScroll(2000, 600));
+        Assert.True(LogFollow.AtBottom(1400, 2000, 600));
+        Assert.True(LogFollow.AtBottom(1390, 2000, 600));   // a hair short still counts as the end
+        Assert.False(LogFollow.AtBottom(900, 2000, 600));   // he has scrolled back to read
+    }
+
+    [Fact]
+    public void A_log_that_fits_on_screen_is_always_at_the_end()
+    {
+        Assert.Equal(0, LogFollow.MaxScroll(400, 600));
+        Assert.True(LogFollow.AtBottom(0, 400, 600));
+        Assert.True(LogFollow.AtBottom(0, 600, 600));
     }
 }

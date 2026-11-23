@@ -32,6 +32,7 @@ public partial class MainPage : ContentPage
     private readonly SharedSurface _surface;
     private string? _surfaceShown;
     private string? _videoShown;
+    private bool _logFollow = true;
     private bool _syncingToggles;
     private bool _syncingMeters;
 
@@ -41,6 +42,7 @@ public partial class MainPage : ContentPage
         _services = services;
         _surface = services.GetRequiredService<SharedSurface>();
         InitializeComponent();
+        ApplyLogVisibility();
         HelpTriggers.Text = SessionCopy.HelpTriggers;
         HelpTools.Text = SessionCopy.HelpTools;
         HelpHoncho.Text = SessionCopy.HelpHoncho;
@@ -131,7 +133,7 @@ public partial class MainPage : ContentPage
             StatusText.Text = _session.StatusText;
             UpdateBanner.IsVisible = !string.IsNullOrEmpty(_session.UpdateBanner);
             UpdateBanner.Text = _session.UpdateBanner ?? "";
-            ErrorBanner.IsVisible = _session.ShowErrors && !string.IsNullOrEmpty(_session.Error);
+            ErrorBanner.IsVisible = !string.IsNullOrEmpty(_session.Error);
             ErrorText.Text = _session.Error ?? "";
             ConnectButton.Text = _session.Connected ? "Disconnect" : "Connect";
             TalkButton.Text = _session.TalkButtonText;
@@ -431,7 +433,8 @@ public partial class MainPage : ContentPage
         // Style comes from the application dictionary; the page indexer cannot see it.
         if (LogLabel.Style is null && FindStyle("Dim") is { } dim) LogLabel.Style = dim;
         LogLabel.Text = tail;
-        _ = LogScroll.ScrollToAsync(0, double.MaxValue, false);
+        // Follow the newest line, unless he has scrolled back to read (Master, 2026-11-23).
+        if (_logFollow) _ = LogScroll.ScrollToAsync(0, double.MaxValue, false);
     }
 
     private async void OnCopyLog(object? sender, EventArgs e) => await GuardUi(nameof(OnCopyLog), async () =>
@@ -502,11 +505,12 @@ public partial class MainPage : ContentPage
         {
             if (TtsSwitch.IsToggled != _session.SpeakReplies) TtsSwitch.IsToggled = _session.SpeakReplies;
             if (FollowSwitch.IsToggled != _session.FollowConversation) FollowSwitch.IsToggled = _session.FollowConversation;
-            if (ErrorsSwitch.IsToggled != _session.ShowErrors) ErrorsSwitch.IsToggled = _session.ShowErrors;
+            if (LogSwitch.IsToggled != _session.ShowLog) LogSwitch.IsToggled = _session.ShowLog;
+            if (LogScroll.IsVisible != _session.ShowLog) ApplyLogVisibility();
             TtsSwitchLabel.Text = _session.SpeakReplies ? "🔊 Speak" : "🔇 Muted";
             TtsSwitchLabel.TextColor = _session.SpeakReplies ? Color.FromArgb("#E5E7EB") : Color.FromArgb("#EF4444");
             FollowSwitchLabel.Text = _session.FollowConversation ? "⇩ Follow" : "⇩ Held";
-            ErrorsSwitchLabel.Text = _session.ShowErrors ? "⚠ Errors" : "⚠ Hidden";
+            LogSwitchLabel.Text = _session.ShowLog ? "📜 Log" : "📜 Log off";
         }
         finally { _syncingToggles = false; }
     }
@@ -523,10 +527,40 @@ public partial class MainPage : ContentPage
         _session.SetFollowConversation(e.Value);
     }
 
-    private void OnErrorsToggled(object? sender, ToggledEventArgs e)
+    private void OnLogToggled(object? sender, ToggledEventArgs e)
     {
         if (_syncingToggles) return;
-        _session.SetShowErrors(e.Value);
+        _session.SetShowLog(e.Value);
+        ApplyLogVisibility();
+    }
+
+    /// <summary>
+    /// The log dock open or closed. Closed, it costs him the history and nothing else: this dock's own
+    /// header keeps "what is happening now", the route and the timings, and the conversation gets the
+    /// bottom quarter of the screen back. Errors are never hidden by this - a failure always shows
+    /// (Master, 2026-11-23).
+    /// </summary>
+    private void ApplyLogVisibility()
+    {
+        if (RootGrid is null) return;
+        var open = _session.ShowLog;
+        LogScroll.IsVisible = open;
+        LogDockHead.IsVisible = open;
+        RootGrid.RowDefinitions[0].Height = open ? new GridLength(3, GridUnitType.Star) : new GridLength(1, GridUnitType.Star);
+        RootGrid.RowDefinitions[1].Height = open ? new GridLength(1, GridUnitType.Star) : GridLength.Auto;
+        // Opening it again means he wants the newest line, so the follow starts fresh.
+        if (open) _logFollow = true;
+    }
+
+    /// <summary>
+    /// He said: *"I always want to see the latest log entry unless I am looking back in the log."* The
+    /// view only chases the newest line while he is already at the end of it; the moment he scrolls up
+    /// to read, it holds still under his eyes.
+    /// </summary>
+    private void OnLogScrolled(object? sender, ScrolledEventArgs e)
+    {
+        try { _logFollow = LogFollow.AtBottom(e.ScrollY, LogScroll.ContentSize.Height, LogScroll.Height); }
+        catch (Exception) { /* a size not yet measured is not a reason to stop following */ }
     }
 
     /// <summary>
@@ -953,7 +987,8 @@ public partial class MainPage : ContentPage
         try
         {
             if (ErrorBanner is null || ErrorText is null || string.IsNullOrEmpty(_session.Error)) return;
-            ErrorBanner.IsVisible = _session.ShowErrors;
+            // Errors are always shown: there is no switch for them, on purpose (Master, 2026-11-23).
+            ErrorBanner.IsVisible = true;
             ErrorText.Text = _session.Error;
         }
         catch { /* banner paint is best-effort after the session error is stored */ }

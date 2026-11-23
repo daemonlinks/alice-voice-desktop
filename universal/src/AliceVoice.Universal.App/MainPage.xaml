@@ -17,7 +17,7 @@
       The scene is AspectFit (Uniform): the whole image stays visible and is letterboxed or pillarboxed.
       Cover and stretch-to-fill are not used.
     -->
-    <Grid RowDefinitions="3*,*" RowSpacing="0">
+    <Grid x:Name="RootGrid" RowDefinitions="3*,*" RowSpacing="0">
         <Grid Grid.Row="0" RowDefinitions="Auto,*" RowSpacing="0">
             <!-- ===== top ===== -->
             <VerticalStackLayout Grid.Row="0" Padding="14,8" Spacing="4" BackgroundColor="#F00F0F16">
@@ -71,9 +71,9 @@
                                     <Label x:Name="FollowSwitchLabel" Text="⇩ Follow" FontSize="13" FontAttributes="Bold" VerticalOptions="Center" />
                                     <Switch x:Name="FollowSwitch" IsToggled="True" Toggled="OnFollowToggled" OnColor="{StaticResource AppGreen}" VerticalOptions="Center" />
                                 </HorizontalStackLayout>
-                                <HorizontalStackLayout Spacing="6" Margin="0,0,12,4" ToolTipProperties.Text="Show the error banner. Off is quieter, not blind: every failure still goes to the log.">
-                                    <Label x:Name="ErrorsSwitchLabel" Text="⚠ Errors" FontSize="13" FontAttributes="Bold" VerticalOptions="Center" />
-                                    <Switch x:Name="ErrorsSwitch" IsToggled="True" Toggled="OnErrorsToggled" OnColor="{StaticResource AppGreen}" VerticalOptions="Center" />
+                                <HorizontalStackLayout Spacing="6" Margin="0,0,12,4" ToolTipProperties.Text="Open or close the log dock. Closed gives the conversation the bottom quarter back; errors always show, either way.">
+                                    <Label x:Name="LogSwitchLabel" Text="📜 Log" FontSize="13" FontAttributes="Bold" VerticalOptions="Center" />
+                                    <Switch x:Name="LogSwitch" IsToggled="True" Toggled="OnLogToggled" OnColor="{StaticResource AppGreen}" VerticalOptions="Center" />
                                 </HorizontalStackLayout>
                                 <Button Text="Test voice" Style="{StaticResource Chip}" Margin="0,0,6,4" Clicked="OnTestTts" />
                                 <Button Text="Reset chat" Style="{StaticResource Chip}" Margin="0,0,6,4" Clicked="OnReset" />
@@ -280,7 +280,7 @@
              its timings - the same discipline as the web page's dock. ===== -->
         <Grid Grid.Row="1" RowDefinitions="Auto,*" BackgroundColor="#FF07070A">
             <Grid Grid.Row="0" RowDefinitions="Auto,Auto,Auto" Padding="12,4" BackgroundColor="#FF0C0C12">
-                <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                <Grid x:Name="LogDockHead" Grid.Row="0" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
                     <Label Text="App log · read-only · select text to copy" Style="{StaticResource Dim}" FontSize="11" VerticalOptions="Center" />
                     <Label x:Name="CopyStatus" Grid.Column="1" Style="{StaticResource Dim}" FontSize="11" VerticalOptions="Center" />
                     <Button Grid.Column="2" Text="Copy all" Style="{StaticResource Chip}" Clicked="OnCopyLog" ToolTipProperties.Text="Copy the whole log to the clipboard" />
@@ -293,7 +293,7 @@
                     <Label x:Name="DockTimings" Grid.Column="1" Text="timings —" Style="{StaticResource Dim}" FontSize="11" LineBreakMode="TailTruncation" />
                 </Grid>
             </Grid>
-            <ScrollView x:Name="LogScroll" Grid.Row="1">
+            <ScrollView x:Name="LogScroll" Grid.Row="1" Scrolled="OnLogScrolled">
                 <local:SelectableLabel x:Name="LogLabel" Padding="12,4" FontSize="11.5" FontFamily="Consolas"
                                        TextColor="#B9B9C4" LineBreakMode="WordWrap" />
             </ScrollView>

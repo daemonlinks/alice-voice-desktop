@@ -16,7 +16,7 @@ public sealed class UiPreferences
 
     public bool SpeakReplies { get; private set; } = true;
     public bool FollowConversation { get; private set; } = true;
-    public bool ShowErrors { get; private set; } = true;
+    public bool ShowLog { get; private set; } = true;
 
     public static UiPreferences Load(string? settingsFile)
     {
@@ -33,7 +33,7 @@ public sealed class UiPreferences
             {
                 prefs.SpeakReplies = Read(root, "SpeakReplies", true);
                 prefs.FollowConversation = Read(root, "FollowConversation", true);
-                prefs.ShowErrors = Read(root, "ShowErrors", true);
+                prefs.ShowLog = Read(root, "ShowLog", true);
             }
         }
         catch (JsonException) { /* a broken settings file must not stop the app; defaults stand */ }
@@ -41,11 +41,11 @@ public sealed class UiPreferences
         return prefs;
     }
 
-    public void Save(bool speakReplies, bool followConversation, bool showErrors = true)
+    public void Save(bool speakReplies, bool followConversation, bool showLog = true)
     {
         SpeakReplies = speakReplies;
         FollowConversation = followConversation;
-        ShowErrors = showErrors;
+        ShowLog = showLog;
         if (string.IsNullOrWhiteSpace(_settingsFile)) return;
         try
         {
@@ -65,7 +65,7 @@ public sealed class UiPreferences
             }
             Set(root, "SpeakReplies", speakReplies);
             Set(root, "FollowConversation", followConversation);
-            Set(root, "ShowErrors", showErrors);
+            Set(root, "ShowLog", showLog);
             var directory = Path.GetDirectoryName(_settingsFile);
             if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
             File.WriteAllText(_settingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));

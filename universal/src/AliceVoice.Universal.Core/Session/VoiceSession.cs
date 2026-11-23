@@ -207,7 +207,7 @@ public sealed class VoiceSession : IAsyncDisposable
         if (SpeakReplies == on) return;
         SpeakReplies = on;
         AddLog(on ? "Speech on - replies are spoken" : "Speech off - replies are captions only");
-        _prefs.Save(SpeakReplies, FollowConversation, ShowErrors);
+        _prefs.Save(SpeakReplies, FollowConversation, ShowLog);
         Touch();
     }
 
@@ -217,20 +217,24 @@ public sealed class VoiceSession : IAsyncDisposable
         if (FollowConversation == on) return;
         FollowConversation = on;
         AddLog(on ? "Follow on - the view will chase the newest turn" : "Follow off - the view stays where you put it");
-        _prefs.Save(SpeakReplies, FollowConversation, ShowErrors);
+        _prefs.Save(SpeakReplies, FollowConversation, ShowLog);
         Touch();
     }
 
-    /// <summary>Whether a failing turn puts a banner on screen. Off is a quieter app, not a blind one: the
-    /// error still goes to the app log, which is the record anyway (Master, 2026-11-23).</summary>
-    public bool ShowErrors { get; private set; } = true;
+    /// <summary>
+    /// Whether the log dock is open. Master, 2026-11-23: *"I want to toggle on and off the log which
+    /// covers the bottom quarter of the screen."* Closing it gives the conversation that quarter back;
+    /// the dock keeps what is happening now, the route and the timings either way.
+    /// Errors are deliberately NOT a switch: a failure always shows (Master, same message).
+    /// </summary>
+    public bool ShowLog { get; private set; } = true;
 
-    public void SetShowErrors(bool on)
+    public void SetShowLog(bool on)
     {
-        if (ShowErrors == on) return;
-        ShowErrors = on;
-        AddLog(on ? "Error banner on" : "Error banner off - failures still appear in this log");
-        _prefs.Save(SpeakReplies, FollowConversation, ShowErrors);
+        if (ShowLog == on) return;
+        ShowLog = on;
+        AddLog(on ? "Log open" : "Log closed - the dock keeps what is happening now");
+        _prefs.Save(SpeakReplies, FollowConversation, ShowLog);
         Touch();
     }
 
