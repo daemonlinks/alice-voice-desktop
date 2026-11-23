@@ -246,7 +246,7 @@ public partial class MainPage : ContentPage
             _backendChipsBuilt = true;
             foreach (var target in _session.Targets)
             {
-                var chip = new Button { Text = target.DisplayName, Margin = new Thickness(0, 0, 6, 4) };
+                var chip = new Button { Text = target.DisplayName, Margin = new Thickness(0, 0, 4, 2) };
                 if (FindStyle("Chip") is { } chipStyle) chip.Style = chipStyle;
                 ToolTipProperties.SetText(chip, target.Id == VoiceSession.AliceLocalId
                     ? "Alice LOCAL — the local Ollama brain, wherever it runs"
