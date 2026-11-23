@@ -50,6 +50,7 @@
                             </HorizontalStackLayout>
                             <Label x:Name="SpeakerGuide" Style="{StaticResource Dim}" FontSize="10" LineBreakMode="TailTruncation"
                                    VerticalOptions="Center" MaximumWidthRequest="290"
+                                   ToolTipProperties.Text="Who is speaking is marked on every line. Address anyone: [alice_1] what do you think?"
                                    Text="Who is speaking is marked on every line. Address anyone: [alice_1] what do you think?" />
                         </FlexLayout>
                         <Label x:Name="UpdateBanner" Text="" TextColor="{StaticResource AppYellow}" IsVisible="False" LineBreakMode="WordWrap" />
@@ -62,7 +63,7 @@
                     </VerticalStackLayout>
 
                     <!-- right: the live active controls. Three tight rows, no scroll box, so the top stays shallow. -->
-                    <VerticalStackLayout Grid.Column="1" WidthRequest="620" Spacing="1" HorizontalOptions="End">
+                    <VerticalStackLayout Grid.Column="1" Spacing="1" HorizontalOptions="End">
                             <!-- the three switches and the engine, on ONE line, never wrapped (Master, 2026-11-23) -->
                             <Grid ColumnDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="14" HorizontalOptions="End">
                                 <HorizontalStackLayout Spacing="6" ToolTipProperties.Text="Speak replies aloud. Off = captions only; the speech engine is never asked.">
@@ -90,12 +91,12 @@
                 <FlexLayout x:Name="BackendChipRow" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start" />
 
                 <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
-                <FlexLayout x:Name="PickerRow" Grid.Column="0" Wrap="Wrap" Direction="Row" AlignItems="Center" JustifyContent="Start"
+                <HorizontalStackLayout x:Name="PickerRow" Grid.Column="0" Spacing="0"
                             ToolTipProperties.Text="Agent: who answers. Provider: which brain. Voice: how she sounds.">
                     <Picker x:Name="AgentPicker" Title="Agent" WidthRequest="180" TextColor="{StaticResource AppText}" Margin="0,0,8,2" SelectedIndexChanged="OnAgentChanged" />
                     <Picker x:Name="ProviderPicker" Title="Provider" WidthRequest="150" TextColor="{StaticResource AppText}" Margin="0,0,8,2" SelectedIndexChanged="OnProviderChanged" />
                     <Picker x:Name="VoicePicker" Title="Voice" WidthRequest="180" TextColor="{StaticResource AppText}" Margin="0,0,8,2" SelectedIndexChanged="OnVoiceChanged" />
-                </FlexLayout>
+                </HorizontalStackLayout>
 
                 <!-- the picture controls, then connect / disconnect, on the RIGHT of the dropdown line, just under
                      the switches (Master, 2026-11-23: the picture controls stay left of Test voice) -->
