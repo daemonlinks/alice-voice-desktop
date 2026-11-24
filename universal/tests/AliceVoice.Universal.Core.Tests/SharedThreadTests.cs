@@ -110,6 +110,43 @@ public class SharedThreadTests
     }
 
     [Fact]
+    public void Our_half_switch_is_remembered_across_restarts()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "appu-prefs-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            new UiPreferences(file).Save(speakReplies: true, followConversation: true, showLog: true, showSurface: false);
+
+            var back = UiPreferences.Load(file);
+            Assert.False(back.ShowSurface);
+            Assert.True(back.ShowLog);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void An_older_settings_file_still_opens_with_our_half_showing()
+    {
+        // A file written before this switch existed has no ShowSurface key. Missing means open, so an
+        // upgrade never closes half his screen behind his back (Master, 2026-11-24).
+        var file = Path.Combine(Path.GetTempPath(), "appu-prefs-old-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(file, new JsonObject
+            {
+                ["SpeakReplies"] = true,
+                ["FollowConversation"] = true,
+                ["ShowLog"] = false,
+            }.ToJsonString());
+
+            var prefs = UiPreferences.Load(file);
+            Assert.True(prefs.ShowSurface);
+            Assert.False(prefs.ShowLog);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
     public void The_log_chases_the_newest_line_only_while_he_is_at_the_end_of_it()
     {
         // Master, 2026-11-23: "I always want to see the latest log entry unless I am looking back in

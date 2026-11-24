@@ -207,7 +207,7 @@ public sealed class VoiceSession : IAsyncDisposable
         if (SpeakReplies == on) return;
         SpeakReplies = on;
         AddLog(on ? "Speech on - replies are spoken" : "Speech off - replies are captions only");
-        _prefs.Save(SpeakReplies, FollowConversation, ShowLog);
+        _prefs.Save(SpeakReplies, FollowConversation, ShowLog, ShowSurface);
         Touch();
     }
 
@@ -217,7 +217,7 @@ public sealed class VoiceSession : IAsyncDisposable
         if (FollowConversation == on) return;
         FollowConversation = on;
         AddLog(on ? "Follow on - the view will chase the newest turn" : "Follow off - the view stays where you put it");
-        _prefs.Save(SpeakReplies, FollowConversation, ShowLog);
+        _prefs.Save(SpeakReplies, FollowConversation, ShowLog, ShowSurface);
         Touch();
     }
 
@@ -234,7 +234,24 @@ public sealed class VoiceSession : IAsyncDisposable
         if (ShowLog == on) return;
         ShowLog = on;
         AddLog(on ? "Log open" : "Log closed - the dock keeps what is happening now");
-        _prefs.Save(SpeakReplies, FollowConversation, ShowLog);
+        _prefs.Save(SpeakReplies, FollowConversation, ShowLog, ShowSurface);
+        Touch();
+    }
+
+    /// <summary>
+    /// Whether OUR half of the screen is open. Master, 2026-11-24: *"the interactive area needs to be
+    /// able to be toggled off via a toggle, in the same way the log does."* So it is the same switch
+    /// shape as the log, persisted the same way, and when it is closed the conversation takes the
+    /// width. Closed and something new lands there, the switch itself says so (MainPage.PaintSurface).
+    /// </summary>
+    public bool ShowSurface { get; private set; } = true;
+
+    public void SetShowSurface(bool on)
+    {
+        if (ShowSurface == on) return;
+        ShowSurface = on;
+        AddLog(on ? "Our half open" : "Our half closed - the conversation takes the width");
+        _prefs.Save(SpeakReplies, FollowConversation, ShowLog, ShowSurface);
         Touch();
     }
 
@@ -268,6 +285,40 @@ public sealed class VoiceSession : IAsyncDisposable
         }
         var id = MatchTarget(name, targets);
         return id is null ? (null, trimmed) : (id, rest.Length == 0 ? trimmed : rest);
+    }
+
+    /// <summary>
+    /// Who a typed line is addressed to when he names more than one: @1 @6 what do you both think? or
+    /// [alice_1][local] good morning. Each name is peeled off the front in the order HE typed them, because
+    /// that is the order they answer in, and a name repeated is only heard once so nobody answers twice. No
+    /// name at all still means "whoever is selected", so the single-target path above is untouched and one
+    /// name is the same turn it has always been (Master, 2026-11-24).
+    /// </summary>
+    public static (IReadOnlyList<string> TargetIds, string Text) ParseAddresses(
+        string? text, IReadOnlyList<SessionTarget> targets)
+    {
+        var ids = new List<string>();
+        var original = (text ?? "").Trim();
+        var rest = original;
+        // What is actually sent: his words with the names taken off the front. A line that is nothing BUT
+        // names keeps the line itself, because an empty turn is dropped and then nobody answers at all.
+        var words = original;
+        while (rest.Length > 0)
+        {
+            var (id, body) = ParseAddress(rest, targets);
+            if (id is null) break;
+            if (!ids.Contains(id, StringComparer.OrdinalIgnoreCase)) ids.Add(id);
+            if (string.Equals(body, rest, StringComparison.Ordinal))
+            {
+                // A name with nothing after it. ParseAddress hands the original back here, which is the end
+                // of the line rather than a failure - the name has already been recorded above, so stop.
+                words = original;
+                break;
+            }
+            rest = body;
+            words = body;
+        }
+        return (ids, words);
     }
 
     /// <summary>A name he would actually say: the id, the label, or just the number she answers to.</summary>
@@ -327,17 +378,104 @@ public sealed class VoiceSession : IAsyncDisposable
         return $"http://{host}:{port}/v1/media/{MediaShare.ToId(src)}";
     }
 
-    /// <summary>The typed path for a shared thread: address it, move the conversation if it named someone else,
-    /// then send. Everything else in the app keeps using <see cref="SendTextAsync"/>.</summary>
+    /// <summary>The typed path for a shared thread: address it, move the conversation if it named someone
+    /// else, then send. One name (or none at all) is exactly the single turn the app has always run; two or
+    /// more names make it a group turn. Everything else in the app keeps using <see cref="SendTextAsync"/>.</summary>
     public async Task SendAddressedAsync(string? text, CancellationToken ct = default)
     {
-        var (target, rest) = ParseAddress(text, Targets);
-        if (target is not null && !string.Equals(target, SelectedTargetId, StringComparison.OrdinalIgnoreCase))
+        var (ids, wording) = ParseAddresses(text, Targets);
+        if (ids.Count <= 1)
         {
-            AddLog($"Spoken to {target} - the conversation moves there for this turn");
-            await SelectTargetAsync(target, ct);
+            if (ids.Count == 1 && !string.Equals(ids[0], SelectedTargetId, StringComparison.OrdinalIgnoreCase))
+            {
+                AddLog($"Spoken to {ids[0]} - the conversation moves there for this turn");
+                await SelectTargetAsync(ids[0], ct);
+            }
+            var single = ids.Count == 1 ? ids[0] : SelectedTargetId;
+            if (!await EnsureReachableAsync(single, ct, "your line")) return;
+            var before = Transcript.Count;
+            await SendTextAsync(string.IsNullOrWhiteSpace(wording) ? text : wording, ct);
+            if (string.IsNullOrWhiteSpace(LastReplySince(before)))
+                Append(TranscriptKind.System, "", $"{NameOf(single)} did not answer in time — she may have been waking up (the turn limit is three minutes).", showRemember: false);
+            return;
         }
-        await SendTextAsync(string.IsNullOrWhiteSpace(rest) ? text : rest, ct);
+
+        // A group turn: every named voice answers, in the order he named them, and each one is told what the
+        // ones before her have just said - otherwise three of them talk past each other and it is three
+        // monologues on one screen rather than a conversation (Master, 2026-11-24). One at a time, because
+        // his ear follows one voice, and because a local turn and a fleet turn cannot land at the same moment.
+        AddLog($"Group turn: {string.Join(", ", ids)} - they answer in that order");
+        var said = new List<string>();
+        foreach (var id in ids)
+        {
+            if (ct.IsCancellationRequested) return;
+            if (!string.Equals(id, SelectedTargetId, StringComparison.OrdinalIgnoreCase))
+            {
+                await SelectTargetAsync(id, ct);
+            }
+            // Nobody is silently left out of a group turn. A voice that cannot be reached, or that
+            // answers nothing, says so in the thread - otherwise "one of the three never answered" is
+            // indistinguishable from a bug (Master asked why she had gone quiet, 2026-11-24).
+            if (!await EnsureReachableAsync(id, ct, "this turn")) continue;
+            var before = Transcript.Count;
+            await SendTextAsync(GroupPrompt(wording, said), ct);
+            var spoken = LastReplySince(before);
+            if (string.IsNullOrWhiteSpace(spoken))
+            {
+                Append(TranscriptKind.System, "", $"{NameOf(id)} did not answer in time — she may have been waking up (the turn limit is three minutes).", showRemember: false);
+                continue;
+            }
+            said.Add($"{NameOf(id)} said: \"{spoken}\"");
+        }
+    }
+
+    /// <summary>
+    /// A voice the app cannot reach must never simply go quiet. SendTextAsync drops the line when the
+    /// session is not connected, so a group turn - or a single addressed turn - would lose a speaker
+    /// with no word to Master about why, which is exactly how "she has stopped responding" looked on
+    /// 2026-11-24. Try once to connect, then say it in the thread rather than say nothing.
+    /// </summary>
+    private async Task<bool> EnsureReachableAsync(string? id, CancellationToken ct, string what)
+    {
+        if (Connected) return true;
+        try { await ConnectAsync(force: false, ct); }
+        catch (Exception) { /* the thread line below is the report either way */ }
+        if (Connected) return true;
+        var who = string.IsNullOrWhiteSpace(id) ? TargetName : NameOf(id);
+        var why = string.IsNullOrWhiteSpace(Error) ? StatusText : Error;
+        Append(TranscriptKind.System, "", $"{who} is offline, so {what} was not sent — {why}", showRemember: false);
+        AddLog($"{who} not reachable - {what} skipped");
+        return false;
+    }
+
+    /// <summary>Her name as he sees it in the thread, for telling the next one who has already spoken.</summary>
+    private string NameOf(string id)
+        => Targets.FirstOrDefault(t => string.Equals(t.Id, id, StringComparison.OrdinalIgnoreCase))?.DisplayName ?? id;
+
+    /// <summary>The reply a turn just added, or null when it added none.</summary>
+    private string? LastReplySince(int countBefore)
+    {
+        var turns = Transcript;
+        for (var i = turns.Count - 1; i >= countBefore && i >= 0; i--)
+        {
+            var entry = turns[i];
+            if (entry.Kind is TranscriptKind.Alice or TranscriptKind.Plum && !string.IsNullOrWhiteSpace(entry.Text))
+            {
+                return entry.Text;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// What the next voice in a group turn is told: his words, then what the others have already said in this
+    /// same turn, said plainly as context so she answers as herself instead of repeating them.
+    /// </summary>
+    private static string GroupPrompt(string body, IReadOnlyList<string> said)
+    {
+        if (said.Count == 0) return body;
+        return body + "\n\n(Context: Master is speaking to several of you at once, in one conversation. " +
+               string.Join(" ", said) + " Answer as yourself, in your own words.)";
     }
 
     /// <summary>A surface picture that would not load is said out loud in the app log, never swallowed.</summary>
