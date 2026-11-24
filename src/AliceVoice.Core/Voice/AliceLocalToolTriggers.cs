@@ -33,7 +33,41 @@ public static class AliceLocalToolTriggers
             || TryPrefix(utterance, "remove that", out forget)
             || TryPrefix(utterance, "delete that", out forget))
             return forget.Length > 0 && Call("honcho_forget", Args(("query", forget), ("content", forget)), out tool, out argsJson);
+        // A request to see her is decided here, not left to an 8B model: it lists the pictures, repeats
+        // itself, and then talks about showing one without showing it (2026-11-24). The host picks the
+        // picture, guided by the words he used.
+        if (TryShowMeAPicture(utterance, out var hint))
+            return Call("gui_show_image", Args(("hint", hint)), out tool, out argsJson);
         return false;
+    }
+
+    private static readonly string[] ShowLeads =
+    {
+        "show me", "show us", "let me see", "lets see", "let us see", "send me", "i want to see",
+        "i would like to see", "id like to see", "can i see", "may i see", "give me"
+    };
+
+    private static readonly string[] PictureNouns =
+    {
+        "picture", "pictures", "photo", "photos", "pic", "pics", "image", "images", "selfie", "video", "film"
+    };
+
+    /// <summary>True for "show me a picture", "let me see you", "send me a selfie" - with the words as the hint.</summary>
+    private static bool TryShowMeAPicture(string utterance, out string hint)
+    {
+        hint = "";
+        var folded = Fold(utterance);
+        if (folded.Length == 0) return false;
+        var lead = false;
+        foreach (var word in ShowLeads)
+            if (folded == word || folded.StartsWith(word + " ", StringComparison.Ordinal)) { lead = true; break; }
+        if (!lead) return false;
+        var noun = PictureNouns.Any(folded.Contains);
+        var her = folded.Contains("yourself") || folded.Contains(" of you") || folded.Contains(" see you")
+                  || folded.EndsWith(" you", StringComparison.Ordinal);
+        if (!noun && !her) return false;
+        hint = folded;
+        return true;
     }
 
     private static bool Save(string content, out string tool, out string argsJson)

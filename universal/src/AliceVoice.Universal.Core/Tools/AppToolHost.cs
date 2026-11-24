@@ -83,7 +83,17 @@ public sealed class AppToolHost
     private string Show(JsonObject args)
     {
         var src = (Text(args, "src") ?? Text(args, "file") ?? Text(args, "name"))?.Trim();
-        if (string.IsNullOrEmpty(src)) return Error("bad args: src", hint: true);
+        // No name at all - or a name that only means "any" - is a request to see SOMETHING: pick one from
+        // the pictures we may show, guided by the hint if he left one ("of you", "at the beach"). The local
+        // brain asking for a picture should never come back empty-handed (2026-11-24).
+        if (string.IsNullOrEmpty(src) || src is "random" or "any" or "?" or "you" or "yourself")
+        {
+            if (_images.Share is not { } picker) return Error("bad args: src", hint: true);
+            var catalogue = picker.Catalogue(50);
+            if (catalogue.Count == 0) return Error("no pictures to show", hint: true);
+            src = Pick(catalogue, Text(args, "hint"));
+            args["src"] = src;
+        }
         var mode = (Text(args, "mode") ?? "stage").Trim().ToLowerInvariant();
         if (mode is not ("stage" or "card" or "backdrop")) return Error("bad args: mode");
 
@@ -111,6 +121,27 @@ public sealed class AppToolHost
             ["mode"] = mode,
             ["note"] = "the app is painting it now; the app log says whether it painted",
         }.ToJsonString();
+    }
+
+    /// <summary>
+    /// The best name for a hint, or a random one. A hint is the words he used - "of you", "at the beach" -
+    /// scored by how many of them appear in a file name, so a beach picture wins a beach question.
+    /// </summary>
+    private static string Pick(IReadOnlyList<string> names, string? hint)
+    {
+        if (string.IsNullOrWhiteSpace(hint)) return names[Random.Shared.Next(names.Count)];
+        var words = hint.ToLowerInvariant()
+            .Split(new[] { ' ', ',', '.', '?', '!', '-', '_', '\'', '"' }, StringSplitOptions.RemoveEmptyEntries)
+            .Where(w => w.Length > 2).Distinct().ToArray();
+        string? best = null;
+        var bestScore = 0;
+        foreach (var name in names)
+        {
+            var lower = name.ToLowerInvariant();
+            var score = words.Count(lower.Contains);
+            if (score > bestScore) { bestScore = score; best = name; }
+        }
+        return best ?? names[Random.Shared.Next(names.Count)];
     }
 
     private string Clear(JsonObject args)

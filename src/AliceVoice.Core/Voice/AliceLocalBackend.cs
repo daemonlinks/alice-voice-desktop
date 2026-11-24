@@ -194,15 +194,17 @@ public sealed class AliceLocalBackend : IVoiceBackend
                     said.Append(delta);
                     EventReceived?.Invoke(new BackendEvent("reply_partial", said.ToString()));
                 }, ct, noTools: true);
-                var words = ToolCommandParser.StripForSpeech(plain.Content);
+                var words = ScrubMeta(ToolCommandParser.StripForSpeech(plain.Content));
                 _history.AddTurn(prompt, words);
                 OperationTrail.Leave("local.smalltalk", words.Length.ToString());
                 EventReceived?.Invoke(new BackendEvent("reply_text", words));
                 return words;
             }
 
+            var ranTrigger = false;
             if (AliceLocalToolTriggers.TryMatch(prompt, out var triggeredTool, out var triggeredArgs))
             {
+                ranTrigger = true;
                 var triggeredResult = await ExecuteKnownToolAsync(triggeredTool, triggeredArgs, ct);
                 messages.Add(new ChatMessage("user",
                     $"[TOOL {triggeredTool} result: {OllamaChatClient.Truncate(triggeredResult, 4000)}]\n" +
@@ -214,7 +216,7 @@ public sealed class AliceLocalBackend : IVoiceBackend
             // A turn that repeats a call, and the last turn of the loop, run with NO tools at all: with the
             // schemas gone the model has nothing to call and must answer in words. Without this an 8B model
             // repeats the same call until the turns run out and then apologises (2026-11-24).
-            var noTools = false;
+            var noTools = ranTrigger;   // a triggered action has already run: this pass only has to voice it
             for (int turn = 0; turn < MaxToolTurns; turn++)
             {
                 if (turn == MaxToolTurns - 1) noTools = true;
@@ -237,7 +239,7 @@ public sealed class AliceLocalBackend : IVoiceBackend
                 if (calls.Count == 0)
                 {
                     // Final guard: a cut-off tool call never reaches the bubble or the voice.
-                    var spoken = ToolCommandParser.StripForSpeech(completion.Content);
+                    var spoken = ScrubMeta(ToolCommandParser.StripForSpeech(completion.Content));
                     if (spoken.Length == 0 && LooksLikeToolJson(completion.Content))
                     {
                         // He wrote nothing a person could hear - only a tool call in a shape we could
@@ -317,6 +319,25 @@ public sealed class AliceLocalBackend : IVoiceBackend
         return text.Contains("\"tool\"", StringComparison.Ordinal)
             || text.Contains("\"name\"", StringComparison.Ordinal)
             || text.Contains("\"function\"", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A small model talks about its own tool use - "(I will not call any more tools)" - and that is not for
+    /// the ear. Whole lines of it go; the words he is meant to hear stay.
+    /// </summary>
+    internal static string ScrubMeta(string said)
+    {
+        if (said.Length == 0 || !said.Contains('(')) return said;
+        var kept = new List<string>();
+        foreach (var line in said.Split('\n'))
+        {
+            var bare = line.Trim().Trim('(', ')', '*', '_', ' ').ToLowerInvariant();
+            var meta = bare.Contains("call anymore tools") || bare.Contains("call any more tools")
+                       || bare.Contains("no more tools") || bare.Contains("not call another tool")
+                       || bare.Contains("will not call any tool") || bare.Contains("i won't call any tool");
+            if (!meta) kept.Add(line);
+        }
+        return string.Join("\n", kept).Trim();
     }
 
     private async Task<string> ExecuteKnownToolAsync(string tool, string argsJson, CancellationToken ct)

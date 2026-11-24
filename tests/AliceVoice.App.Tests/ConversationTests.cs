@@ -334,6 +334,36 @@ public class ToolCallTests
     public void ContextPhrasesAreLeftForTheModel(string utterance)
         => Assert.False(AliceLocalToolTriggers.TryMatch(utterance, out _, out _));
 
+    [Theory]
+    [InlineData("Show me a picture")]
+    [InlineData("show me a picture of you")]
+    [InlineData("let me see you")]
+    [InlineData("send me a selfie")]
+    [InlineData("Show me a photo")]
+    [InlineData("Show me the picture of the beach")]
+    public void APictureRequestIsDecidedHereNotByTheModel(string utterance)
+    {
+        Assert.True(AliceLocalToolTriggers.TryMatch(utterance, out var tool, out var args));
+        Assert.Equal("gui_show_image", tool);
+        Assert.Contains("hint", args);
+    }
+
+    [Theory]
+    [InlineData("show me how you feel")]
+    [InlineData("show me")]
+    [InlineData("you are beautiful")]
+    [InlineData("tell me about your day")]
+    public void PictureTriggersDoNotSwallowOtherTalk(string utterance)
+        => Assert.False(AliceLocalToolTriggers.TryMatch(utterance, out _, out _));
+
+    [Fact]
+    public void MetaLinesAboutToolsAreNotSpoken()
+    {
+        const string said = "I'm here, Master.\n(I will not call any more tools)";
+        Assert.Equal("I'm here, Master.", AliceLocalBackend.ScrubMeta(said));
+        Assert.Equal("Just for you.", AliceLocalBackend.ScrubMeta("Just for you."));
+    }
+
     [Fact]
     public void RememberButtonPrefixesAboutMaster()
     {
