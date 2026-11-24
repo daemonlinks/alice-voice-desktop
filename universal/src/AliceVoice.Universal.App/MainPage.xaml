@@ -50,8 +50,8 @@
                             </HorizontalStackLayout>
                             <Label x:Name="SpeakerGuide" Style="{StaticResource Dim}" FontSize="10" LineBreakMode="TailTruncation"
                                    VerticalOptions="Center" MaximumWidthRequest="290"
-                                   ToolTipProperties.Text="Who is speaking is marked on every line. Address anyone: [alice_1] what do you think?"
-                                   Text="Who is speaking is marked on every line. Address anyone: [alice_1] what do you think?" />
+                                   ToolTipProperties.Text="Who is speaking is marked on every line. Address one: @1 hello or [alice_1] hello. Name several and they each answer, in the order you name them: @1 @6 hello, or [local][6] good morning."
+                                   Text="Name several and they all answer in turn: @1 @6 hello - or just one: [alice_1] hi." />
                         </FlexLayout>
                         <Label x:Name="UpdateBanner" Text="" TextColor="{StaticResource AppYellow}" IsVisible="False" LineBreakMode="WordWrap" />
                         <Border x:Name="ErrorBanner" IsVisible="False" BackgroundColor="#1A0A0A" Stroke="{StaticResource AppRed}" Padding="8,3">
