@@ -64,7 +64,7 @@
 
                     <!-- right: the live active controls. Three tight rows, no scroll box, so the top stays shallow. -->
                     <VerticalStackLayout Grid.Column="1" Spacing="1" HorizontalOptions="End">
-                            <!-- the three switches bunched together as ONE group, then the engine (Master, 2026-11-23) -->
+                            <!-- the four switches bunched together as ONE group, then the engine (Master, 2026-11-23) -->
                             <HorizontalStackLayout Spacing="2" HorizontalOptions="End" VerticalOptions="Center">
                                 <HorizontalStackLayout Spacing="4" VerticalOptions="Center" ToolTipProperties.Text="Speak replies aloud. Off = captions only; the speech engine is never asked.">
                                     <Label x:Name="TtsSwitchLabel" Text="🔊 Speak" FontSize="13" FontAttributes="Bold" VerticalOptions="Center" />
@@ -77,6 +77,10 @@
                                 <HorizontalStackLayout Spacing="4" VerticalOptions="Center" ToolTipProperties.Text="Open or close the log dock. Closed gives the conversation the bottom quarter back; errors always show, either way.">
                                     <Label x:Name="LogSwitchLabel" Text="📜 Log" FontSize="13" FontAttributes="Bold" VerticalOptions="Center" />
                                     <Switch x:Name="LogSwitch" WidthRequest="44" MinimumWidthRequest="44" IsToggled="True" Toggled="OnLogToggled" OnColor="{StaticResource AppGreen}" VerticalOptions="Center" />
+                                </HorizontalStackLayout>
+                                <HorizontalStackLayout Spacing="4" VerticalOptions="Center" ToolTipProperties.Text="Open or close our half of the screen - the picture, the question, the meters. Closed gives the conversation the full width, and this switch says when something new is waiting in there.">
+                                    <Label x:Name="SurfaceSwitchLabel" Text="🖼 Ours" FontSize="13" FontAttributes="Bold" VerticalOptions="Center" />
+                                    <Switch x:Name="SurfaceSwitch" WidthRequest="44" MinimumWidthRequest="44" IsToggled="True" Toggled="OnSurfaceToggled" OnColor="{StaticResource AppGreen}" VerticalOptions="Center" />
                                 </HorizontalStackLayout>
                                 <HorizontalStackLayout Spacing="0" Margin="10,0,0,0" VerticalOptions="Center">
                                     <Button x:Name="TtsAllTalk" Text="AllTalk" Style="{StaticResource Chip}" Margin="0,0,4,0" Clicked="OnEngine" ToolTipProperties.Text="AllTalk (local)" />
@@ -213,13 +217,14 @@
                 <Image x:Name="BackdropImage" Aspect="AspectFit" HorizontalOptions="Fill" VerticalOptions="Fill"
                        BackgroundColor="{StaticResource AppBg}" InputTransparent="True" IsVisible="False" />
 
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="0">
+                <Grid x:Name="MiddleGrid" ColumnDefinitions="*,*" ColumnSpacing="0">
                     <!-- the left half: the conversation -->
                     <ScrollView x:Name="TranscriptScroll" Grid.Column="0" BackgroundColor="#660A0A0F">
                         <VerticalStackLayout x:Name="TranscriptPanel" Padding="14,10" Spacing="8" />
                     </ScrollView>
 
-                    <!-- the right half: OUR half. Always here, empty or full, never hidden. -->
+                    <!-- the right half: OUR half - his to close too, with the switch at the top right
+                         (Master, 2026-11-24). Empty or full, but never blank. -->
                     <Border x:Name="SurfacePanel" Grid.Column="1" Margin="4,8,10,8" Padding="0"
                             Stroke="#3AA855F7" StrokeThickness="1" BackgroundColor="#CC0D0D14">
                         <Border.StrokeShape><RoundRectangle CornerRadius="12" /></Border.StrokeShape>

@@ -33,6 +33,8 @@ public partial class MainPage : ContentPage
     private string? _surfaceShown;
     private string? _videoShown;
     private bool _logFollow = true;
+    /// <summary>Something new landed in our half while it was closed - the switch says so.</summary>
+    private bool _surfaceNews;
     private bool _syncingToggles;
     private bool _syncingMeters;
 
@@ -43,6 +45,7 @@ public partial class MainPage : ContentPage
         _surface = services.GetRequiredService<SharedSurface>();
         InitializeComponent();
         ApplyLogVisibility();
+        ApplySurfaceVisibility();
         HelpTriggers.Text = SessionCopy.HelpTriggers;
         HelpTools.Text = SessionCopy.HelpTools;
         HelpHoncho.Text = SessionCopy.HelpHoncho;
@@ -507,10 +510,13 @@ public partial class MainPage : ContentPage
             if (FollowSwitch.IsToggled != _session.FollowConversation) FollowSwitch.IsToggled = _session.FollowConversation;
             if (LogSwitch.IsToggled != _session.ShowLog) LogSwitch.IsToggled = _session.ShowLog;
             if (LogScroll.IsVisible != _session.ShowLog) ApplyLogVisibility();
+            if (SurfaceSwitch.IsToggled != _session.ShowSurface) SurfaceSwitch.IsToggled = _session.ShowSurface;
+            if (SurfacePanel.IsVisible != _session.ShowSurface) ApplySurfaceVisibility();
             TtsSwitchLabel.Text = _session.SpeakReplies ? "🔊 Speak" : "🔇 Muted";
             TtsSwitchLabel.TextColor = _session.SpeakReplies ? Color.FromArgb("#E5E7EB") : Color.FromArgb("#EF4444");
             FollowSwitchLabel.Text = _session.FollowConversation ? "⇩ Follow" : "⇩ Held";
             LogSwitchLabel.Text = _session.ShowLog ? "📜 Log" : "📜 Log off";
+            PaintSurfaceSwitch();
         }
         finally { _syncingToggles = false; }
     }
@@ -553,6 +559,58 @@ public partial class MainPage : ContentPage
     }
 
     /// <summary>
+    /// Our half of the screen, opened or closed. The same shape as the log switch above it, so there is
+    /// one habit for both: the switch is the truth, and the label says what state it is in.
+    /// </summary>
+    private void OnSurfaceToggled(object? sender, ToggledEventArgs e)
+    {
+        if (_syncingToggles) return;
+        _session.SetShowSurface(e.Value);
+        ApplySurfaceVisibility();
+    }
+
+    /// <summary>
+    /// Closed, our half costs him nothing but the width of it: the conversation takes the whole middle
+    /// (the column really does collapse - hiding the panel alone would have left a hollow half), and a
+    /// video is stopped rather than left playing out of sight.
+    /// </summary>
+    private void ApplySurfaceVisibility()
+    {
+        if (SurfacePanel is null || MiddleGrid is null) return;
+        var open = _session.ShowSurface;
+        SurfacePanel.IsVisible = open;
+        MiddleGrid.ColumnDefinitions[1].Width = open
+            ? new GridLength(1, GridUnitType.Star)
+            : new GridLength(0);
+        if (open) _surfaceNews = false;
+        else HideVideo();
+        // Rebuild what is in there on the next paint, so opening it shows the current picture or video
+        // instead of whatever was painted before it was closed.
+        _surfaceShown = null;
+    }
+
+    /// <summary>
+    /// The switch's own label: open, closed, or closed with something waiting. Master asked for the
+    /// toggle to be able to *"switch to showing if something new to see there"* (2026-11-24), so the
+    /// word on the switch changes - a badge nobody looks at would not have answered him.
+    /// </summary>
+    private void PaintSurfaceSwitch()
+    {
+        if (SurfaceSwitchLabel is null) return;
+        var open = _session.ShowSurface;
+        var news = !open && _surfaceNews;
+        SurfaceSwitchLabel.Text = open ? "🖼 Ours" : news ? "🖼 New" : "🖼 Ours off";
+        SurfaceSwitchLabel.TextColor = news ? Accent() : Color.FromArgb("#E5E7EB");
+    }
+
+    /// <summary>The app's own green, so the news colour matches every other "there is something here" cue.</summary>
+    private static Color Accent() =>
+        Application.Current?.Resources.TryGetValue("AppGreen", out var green) == true && green is Color c
+            ? c
+            : Color.FromArgb("#22C55E");
+
+
+    /// <summary>
     /// He said: *"I always want to see the latest log entry unless I am looking back in the log."* The
     /// view only chases the newest line while he is already at the end of it; the moment he scrolls up
     /// to read, it holds still under his eyes.
@@ -574,6 +632,14 @@ public partial class MainPage : ContentPage
         var signature = _surface.Signature();
         if (signature == _surfaceShown) return;
         _surfaceShown = signature;
+
+        // Something new landed in our half while it was closed: say so ON THE SWITCH, so he can leave
+        // it closed and still know there is something to see (Master, 2026-11-24).
+        if (!_session.ShowSurface && _surface.HasContent)
+        {
+            _surfaceNews = true;
+            PaintSurfaceSwitch();
+        }
 
         // Our half of the screen is always here now: empty, it says what it is for, and the ✕ only
         // shows when there is something to clear (Master, 2026-11-23).

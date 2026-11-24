@@ -207,7 +207,7 @@ public sealed class VoiceSession : IAsyncDisposable
         if (SpeakReplies == on) return;
         SpeakReplies = on;
         AddLog(on ? "Speech on - replies are spoken" : "Speech off - replies are captions only");
-        _prefs.Save(SpeakReplies, FollowConversation, ShowLog);
+        _prefs.Save(SpeakReplies, FollowConversation, ShowLog, ShowSurface);
         Touch();
     }
 
@@ -217,7 +217,7 @@ public sealed class VoiceSession : IAsyncDisposable
         if (FollowConversation == on) return;
         FollowConversation = on;
         AddLog(on ? "Follow on - the view will chase the newest turn" : "Follow off - the view stays where you put it");
-        _prefs.Save(SpeakReplies, FollowConversation, ShowLog);
+        _prefs.Save(SpeakReplies, FollowConversation, ShowLog, ShowSurface);
         Touch();
     }
 
@@ -234,7 +234,24 @@ public sealed class VoiceSession : IAsyncDisposable
         if (ShowLog == on) return;
         ShowLog = on;
         AddLog(on ? "Log open" : "Log closed - the dock keeps what is happening now");
-        _prefs.Save(SpeakReplies, FollowConversation, ShowLog);
+        _prefs.Save(SpeakReplies, FollowConversation, ShowLog, ShowSurface);
+        Touch();
+    }
+
+    /// <summary>
+    /// Whether OUR half of the screen is open. Master, 2026-11-24: *"the interactive area needs to be
+    /// able to be toggled off via a toggle, in the same way the log does."* So it is the same switch
+    /// shape as the log, persisted the same way, and when it is closed the conversation takes the
+    /// width. Closed and something new lands there, the switch itself says so (MainPage.PaintSurface).
+    /// </summary>
+    public bool ShowSurface { get; private set; } = true;
+
+    public void SetShowSurface(bool on)
+    {
+        if (ShowSurface == on) return;
+        ShowSurface = on;
+        AddLog(on ? "Our half open" : "Our half closed - the conversation takes the width");
+        _prefs.Save(SpeakReplies, FollowConversation, ShowLog, ShowSurface);
         Touch();
     }
 
@@ -374,7 +391,12 @@ public sealed class VoiceSession : IAsyncDisposable
                 AddLog($"Spoken to {ids[0]} - the conversation moves there for this turn");
                 await SelectTargetAsync(ids[0], ct);
             }
+            var single = ids.Count == 1 ? ids[0] : SelectedTargetId;
+            if (!await EnsureReachableAsync(single, ct, "your line")) return;
+            var before = Transcript.Count;
             await SendTextAsync(string.IsNullOrWhiteSpace(wording) ? text : wording, ct);
+            if (string.IsNullOrWhiteSpace(LastReplySince(before)))
+                Append(TranscriptKind.System, "", $"{NameOf(single)} did not answer in time — she may have been waking up (the turn limit is three minutes).", showRemember: false);
             return;
         }
 
@@ -391,14 +413,39 @@ public sealed class VoiceSession : IAsyncDisposable
             {
                 await SelectTargetAsync(id, ct);
             }
+            // Nobody is silently left out of a group turn. A voice that cannot be reached, or that
+            // answers nothing, says so in the thread - otherwise "one of the three never answered" is
+            // indistinguishable from a bug (Master asked why she had gone quiet, 2026-11-24).
+            if (!await EnsureReachableAsync(id, ct, "this turn")) continue;
             var before = Transcript.Count;
             await SendTextAsync(GroupPrompt(wording, said), ct);
             var spoken = LastReplySince(before);
-            if (!string.IsNullOrWhiteSpace(spoken))
+            if (string.IsNullOrWhiteSpace(spoken))
             {
-                said.Add($"{NameOf(id)} said: \"{spoken}\"");
+                Append(TranscriptKind.System, "", $"{NameOf(id)} did not answer in time — she may have been waking up (the turn limit is three minutes).", showRemember: false);
+                continue;
             }
+            said.Add($"{NameOf(id)} said: \"{spoken}\"");
         }
+    }
+
+    /// <summary>
+    /// A voice the app cannot reach must never simply go quiet. SendTextAsync drops the line when the
+    /// session is not connected, so a group turn - or a single addressed turn - would lose a speaker
+    /// with no word to Master about why, which is exactly how "she has stopped responding" looked on
+    /// 2026-11-24. Try once to connect, then say it in the thread rather than say nothing.
+    /// </summary>
+    private async Task<bool> EnsureReachableAsync(string? id, CancellationToken ct, string what)
+    {
+        if (Connected) return true;
+        try { await ConnectAsync(force: false, ct); }
+        catch (Exception) { /* the thread line below is the report either way */ }
+        if (Connected) return true;
+        var who = string.IsNullOrWhiteSpace(id) ? TargetName : NameOf(id);
+        var why = string.IsNullOrWhiteSpace(Error) ? StatusText : Error;
+        Append(TranscriptKind.System, "", $"{who} is offline, so {what} was not sent — {why}", showRemember: false);
+        AddLog($"{who} not reachable - {what} skipped");
+        return false;
     }
 
     /// <summary>Her name as he sees it in the thread, for telling the next one who has already spoken.</summary>
