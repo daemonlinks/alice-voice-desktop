@@ -51,6 +51,7 @@ public sealed class AliceLocalBackend : IVoiceBackend
     internal const string ToolDescriptions =
         "You can use tools. To call one, reply with ONLY a JSON object " +
         "of the form {\"tool\": \"<name>\", \"args\": {...}} and no other text. " +
+        "A call is never {\"name\": ..., \"parameters\": ...} and never a function name on its own. " +
         "After the tool result comes back, answer Master in ordinary speech and never leave raw JSON in the spoken reply.\n" +
         "Tools:\n" +
         "- honcho_search: {\"query\": \"<search terms>\"} — search your memory of Master.\n" +
@@ -192,6 +193,16 @@ public sealed class AliceLocalBackend : IVoiceBackend
                 {
                     // Final guard: a cut-off tool call never reaches the bubble or the voice.
                     var spoken = ToolCommandParser.StripForSpeech(completion.Content);
+                    if (spoken.Length == 0 && LooksLikeToolJson(completion.Content))
+                    {
+                        // He wrote nothing a person could hear - only a tool call in a shape we could
+                        // not run. Ask again in words: silence is better than raw JSON in the voice.
+                        OperationTrail.Leave("tool.unparsed", completion.Content.Length.ToString());
+                        messages.Add(new ChatMessage("assistant", completion.Content));
+                        messages.Add(new ChatMessage("user",
+                            "[That was not a tool call I can run. Answer Master in ordinary speech, in words, with no JSON at all.]"));
+                        continue;
+                    }
                     _history.AddTurn(prompt, spoken);
                     EventReceived?.Invoke(new BackendEvent("reply_text", spoken));
                     return spoken;
@@ -244,6 +255,20 @@ public sealed class AliceLocalBackend : IVoiceBackend
     }
 
     internal static bool IsKnownTool(string tool) => KnownTools.Contains(tool);
+
+    /// <summary>
+    /// True when a reply carried NOTHING but a JSON object naming a tool. Such a reply must never be
+    /// spoken: either the call runs, or he is asked again in words (found leaking 2026-11-24).
+    /// </summary>
+    internal static bool LooksLikeToolJson(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content)) return false;
+        var text = content.Trim();
+        if (text.Length < 4 || text[0] != '{' || text[^1] != '}') return false;
+        return text.Contains("\"tool\"", StringComparison.Ordinal)
+            || text.Contains("\"name\"", StringComparison.Ordinal)
+            || text.Contains("\"function\"", StringComparison.Ordinal);
+    }
 
     private async Task<string> ExecuteKnownToolAsync(string tool, string argsJson, CancellationToken ct)
     {
