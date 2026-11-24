@@ -51,7 +51,8 @@ public class OllamaRequestTests
         var names = doc.RootElement.GetProperty("tools").EnumerateArray()
             .Select(t => t.GetProperty("function").GetProperty("name").GetString())
             .ToArray();
-        Assert.Equal(new[] { "honcho_search", "honcho_save", "honcho_forget", "time", "search" }, names);
+        Assert.Equal(new[] { "honcho_search", "honcho_save", "honcho_forget", "time", "search",
+            "gui_list_pictures", "gui_show_image", "gui_image_clear", "gui_surface" }, names);
         Assert.Equal("honcho_search", completion.ToolCalls[0].Name);
         Assert.Contains("name", completion.ToolCalls[0].ArgumentsJson);
     }

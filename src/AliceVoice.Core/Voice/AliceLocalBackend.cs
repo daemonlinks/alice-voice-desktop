@@ -26,7 +26,7 @@ public sealed class AliceLocalBackend : IVoiceBackend
     private static readonly HashSet<string> KnownTools = new(StringComparer.Ordinal)
     {
         "honcho_search", "honcho_save", "honcho_forget", "time", "search",
-        "gui_list_pictures", "gui_show_image", "gui_image_clear"
+        "gui_list_pictures", "gui_show_image", "gui_image_clear", "gui_surface", "gui_surface_clear"
     };
     private readonly AliceVoiceOptions _options;
     private readonly OllamaChatClient _ollama;
@@ -65,8 +65,14 @@ public sealed class AliceLocalBackend : IVoiceBackend
         "You may pass {\"src\": \"<absolute path or https URL>\"} instead of file. Optional: " +
         "{\"mode\": \"stage|card|backdrop\", \"caption\": \"<short line>\", \"keep\": true, \"duration_s\": 20}.\n" +
         "- gui_image_clear: {\"id\": \"<optional id>\"} — take a picture back off the screen.\n" +
+        "- gui_surface: {\"kind\": \"image|video|question|status|meters\", \"title\": \"<short>\", \"body\": \"<a line>\", " +
+        "\"src\": \"<a name from gui_list_pictures>\", \"options\": [\"<an answer he can press>\"]} — put something in the " +
+        "half of the screen you share with Master: a picture, a film, a question he can answer with one press, how you feel, " +
+        "or the meters he can put his hand on.\n" +
+        "- gui_surface_clear: {} — empty your half of the screen.\n" +
         "Trigger phrases:\n" +
         "- \"Show me…\" a picture, or any request to see something → gui_show_image with a name, calling gui_list_pictures first if you need one.\n" +
+        "- A question you want him to answer with one press, how you feel, or the meters → gui_surface.\n" +
         "- \"Take that down\" or \"clear the picture\" → gui_image_clear.\n" +
         "- \"Remember that…\" or \"Remember I…\" → honcho_save.\n" +
         "- \"What do you know about me?\" → honcho_search first, then speak the results.\n" +
@@ -99,7 +105,8 @@ public sealed class AliceLocalBackend : IVoiceBackend
         await ReloadSoulAsync(ct);
         await _ollama.CheckReachableAsync(settings.OllamaUrl, ct);
         IsConnected = true;
-        Log.Information("Alice LOCAL connected at {Url}, model {Model}, SOUL {Chars} chars", settings.OllamaUrl, settings.Model, _soul.Length);
+        Log.Information("Alice LOCAL connected at {Url}, model {Model}, SOUL {Chars} chars, tool shapes {Shapes}, small-talk guard on",
+            settings.OllamaUrl, settings.Model, _soul.Length, "tool|name|function");
         EventReceived?.Invoke(new BackendEvent("backend_ready",
             $"Alice LOCAL ready — model {Settings.Model}, SOUL {(_soulPath is null ? "default" : Path.GetFileName(Path.GetDirectoryName(_soulPath)))} ({_soul.Length} chars), tools on"));
     }

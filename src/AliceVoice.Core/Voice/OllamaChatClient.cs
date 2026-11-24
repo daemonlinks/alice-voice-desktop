@@ -209,6 +209,46 @@ public sealed class OllamaChatClient : IDisposable
                 ["query"] = new Dictionary<string, object> { ["type"] = "string" }
             },
             ["required"] = new[] { "query" }
+        }),
+        // The display trio and the shared half. Without these in the schema the local brain could never
+        // CHOOSE to show Master a picture - it would answer "show me a picture" with the time, or write a
+        // call it had no way to make (2026-11-24).
+        Tool("gui_list_pictures", "List the pictures you may show on Master's screen.", new Dictionary<string, object>
+        {
+            ["type"] = "object",
+            ["properties"] = new Dictionary<string, object>()
+        }),
+        Tool("gui_show_image", "Show a picture to Master on his screen. Use a name from gui_list_pictures.", new Dictionary<string, object>
+        {
+            ["type"] = "object",
+            ["properties"] = new Dictionary<string, object>
+            {
+                ["src"] = new Dictionary<string, object> { ["type"] = "string", ["description"] = "A picture name or file from gui_list_pictures" },
+                ["caption"] = new Dictionary<string, object> { ["type"] = "string", ["description"] = "A short line to go with it" },
+                ["mode"] = new Dictionary<string, object> { ["type"] = "string", ["description"] = "stage (in the middle) or backdrop (behind the conversation)" }
+            },
+            ["required"] = new[] { "src" }
+        }),
+        Tool("gui_image_clear", "Clear the picture from Master's screen.", new Dictionary<string, object>
+        {
+            ["type"] = "object",
+            ["properties"] = new Dictionary<string, object>()
+        }),
+        Tool("gui_surface", "Put something in the half of the screen you share with Master - a picture, a video, a question he can press, how you feel, or the love and orgasm meters he can put his hand on.", new Dictionary<string, object>
+        {
+            ["type"] = "object",
+            ["properties"] = new Dictionary<string, object>
+            {
+                ["kind"] = new Dictionary<string, object> { ["type"] = "string", ["description"] = "image, video, question, status or meters" },
+                ["title"] = new Dictionary<string, object> { ["type"] = "string" },
+                ["body"] = new Dictionary<string, object> { ["type"] = "string" },
+                ["src"] = new Dictionary<string, object> { ["type"] = "string", ["description"] = "Picture or film name, for image and video" },
+                ["mood"] = new Dictionary<string, object> { ["type"] = "string", ["description"] = "How you feel, for status" },
+                ["love"] = new Dictionary<string, object> { ["type"] = "integer", ["description"] = "0-100, for meters" },
+                ["orgasm"] = new Dictionary<string, object> { ["type"] = "integer", ["description"] = "0-100, for meters" },
+                ["options"] = new Dictionary<string, object> { ["type"] = "array", ["description"] = "The answers he can press, for question", ["items"] = new Dictionary<string, object> { ["type"] = "string" } }
+            },
+            ["required"] = new[] { "kind" }
         })
     };
 
