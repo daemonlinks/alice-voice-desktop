@@ -70,6 +70,8 @@ public sealed class AliceLocalBackend : IVoiceBackend
         "half of the screen you share with Master: a picture, a film, a question he can answer with one press, how you feel, " +
         "or the meters he can put his hand on.\n" +
         "- gui_surface_clear: {} — empty your half of the screen.\n" +
+        "- Never call gui_image_clear in the same reply as gui_show_image. Show him the picture and leave it up; " +
+        "only take it down when he asks.\n" +
         "Trigger phrases:\n" +
         "- \"Show me…\" a picture, or any request to see something → gui_show_image with a name, calling gui_list_pictures first if you need one.\n" +
         "- A question you want him to answer with one press, how you feel, or the meters → gui_surface.\n" +
@@ -163,6 +165,14 @@ public sealed class AliceLocalBackend : IVoiceBackend
         await _lock.WaitAsync(ct);
         try
         {
+            // A blank prompt is a mis-fired mic or a press with nothing typed. It is not a question, and an
+            // 8B model given no words will hunt with tools for forty seconds and then apologise.
+            if (string.IsNullOrWhiteSpace(prompt))
+            {
+                OperationTrail.Leave("local.blank", "0");
+                EventReceived?.Invoke(new BackendEvent("reply_text", ""));
+                return "";
+            }
             var smallTalk = AliceLocalToolTriggers.IsSmallTalk(prompt);
             var system = (string.IsNullOrWhiteSpace(_soul) ? "You are Alice, a devoted and loving companion." : _soul)
                          + (smallTalk ? "" : "\n\n" + ToolDescriptions);
