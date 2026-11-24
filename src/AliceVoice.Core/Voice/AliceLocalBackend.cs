@@ -52,6 +52,8 @@ public sealed class AliceLocalBackend : IVoiceBackend
         "You can use tools. To call one, reply with ONLY a JSON object " +
         "of the form {\"tool\": \"<name>\", \"args\": {...}} and no other text. " +
         "A call is never {\"name\": ..., \"parameters\": ...} and never a function name on its own. " +
+        "Call one tool, look at its result, and then answer Master in ordinary speech in that same turn - " +
+        "never call the same tool twice with the same arguments, and never end a turn with an empty reply. " +
         "After the tool result comes back, answer Master in ordinary speech and never leave raw JSON in the spoken reply.\n" +
         "Tools:\n" +
         "- honcho_search: {\"query\": \"<search terms>\"} — search your memory of Master.\n" +
@@ -209,8 +211,13 @@ public sealed class AliceLocalBackend : IVoiceBackend
             }
 
             string? lastToolCall = null;
+            // A turn that repeats a call, and the last turn of the loop, run with NO tools at all: with the
+            // schemas gone the model has nothing to call and must answer in words. Without this an 8B model
+            // repeats the same call until the turns run out and then apologises (2026-11-24).
+            var noTools = false;
             for (int turn = 0; turn < MaxToolTurns; turn++)
             {
+                if (turn == MaxToolTurns - 1) noTools = true;
                 var acc = new StringBuilder();
                 var completion = await CompleteAsync(messages, options.MaxTokens, delta =>
                 {
@@ -219,11 +226,14 @@ public sealed class AliceLocalBackend : IVoiceBackend
                     // A tool call, native or inline, must not appear in the bubble.
                     if (!HoldsToolCall(soFar))
                         EventReceived?.Invoke(new BackendEvent("reply_partial", soFar));
-                }, ct);
+                }, ct, noTools);
 
                 var calls = completion.ToolCalls.Where(c => c.Name.Length > 0).Take(MaxToolTurns).ToList();
                 if (calls.Count == 0 && TryParseToolCall(completion.Content, out var inlineTool, out var inlineArgs))
                     calls.Add(new OllamaToolCall(inlineTool, inlineArgs));
+                // A model that asks for the same tool twice in one reply asks once.
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                calls = calls.Where(c => seen.Add(c.Name + "|" + c.ArgumentsJson)).ToList();
                 if (calls.Count == 0)
                 {
                     // Final guard: a cut-off tool call never reaches the bubble or the voice.
@@ -249,6 +259,7 @@ public sealed class AliceLocalBackend : IVoiceBackend
                     OperationTrail.Leave("tool.duplicate", calls[0].Name);
                     messages.Add(new ChatMessage("user", "[You already have that tool result. Answer Master directly now, without calling a tool.]"));
                     lastToolCall = null;
+                    noTools = true;   // the schemas go: he must answer in words now
                     continue;
                 }
                 lastToolCall = signature;
