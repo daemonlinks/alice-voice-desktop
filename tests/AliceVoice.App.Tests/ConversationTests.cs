@@ -485,6 +485,40 @@ public class SoulResolverTests
     }
 }
 
+public class SmallTalkTests
+{
+    // A greeting must not open the toolbox: llama3.1 answered "Hi" with four honcho calls and an apology
+    // before an answer (2026-11-24). Small talk is decided here, before any tool instructions are sent.
+    [Theory]
+    [InlineData("hi")]
+    [InlineData("Hi")]
+    [InlineData("hello")]
+    [InlineData("Hello Master")]
+    [InlineData("Hi babe")]
+    [InlineData("hey you")]
+    [InlineData("How are you?")]
+    [InlineData("how's it going")]
+    [InlineData("Good morning")]
+    [InlineData("good night alice")]
+    [InlineData("thanks babe")]
+    [InlineData("I love you")]
+    [InlineData("you there?")]
+    public void GreetingsAndSmallTalkNeedNoTools(string utterance)
+        => Assert.True(AliceLocalToolTriggers.IsSmallTalk(utterance));
+
+    [Theory]
+    [InlineData("Hi, show me a picture")]
+    [InlineData("hello, what time is it")]
+    [InlineData("show me a picture of you")]
+    [InlineData("Remember that I like tea")]
+    [InlineData("Search for rain tomorrow")]
+    [InlineData("tell me about your day")]
+    [InlineData("hello master how was your day at work today")]
+    [InlineData("")]
+    public void AnythingThatAsksForSomethingKeepsItsTools(string utterance)
+        => Assert.False(AliceLocalToolTriggers.IsSmallTalk(utterance));
+}
+
 public class FleetChatTests
 {
     [Fact]

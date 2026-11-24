@@ -156,13 +156,31 @@ public sealed class AliceLocalBackend : IVoiceBackend
         await _lock.WaitAsync(ct);
         try
         {
+            var smallTalk = AliceLocalToolTriggers.IsSmallTalk(prompt);
             var system = (string.IsNullOrWhiteSpace(_soul) ? "You are Alice, a devoted and loving companion." : _soul)
-                         + "\n\n" + ToolDescriptions;
+                         + (smallTalk ? "" : "\n\n" + ToolDescriptions);
             if (!string.IsNullOrWhiteSpace(options.StyleHint)) system += "\n\n" + options.StyleHint;
 
             var messages = new List<ChatMessage> { new("system", system) };
             messages.AddRange(_history.Snapshot());
             messages.Add(new ChatMessage("user", prompt));
+
+            if (smallTalk)
+            {
+                // A greeting needs no tools. Answer it with the conversation model alone, so a "hi" cannot
+                // become a memory search and an apology - and so it answers in a second instead of forty.
+                var said = new StringBuilder();
+                var plain = await CompleteAsync(messages, options.MaxTokens, delta =>
+                {
+                    said.Append(delta);
+                    EventReceived?.Invoke(new BackendEvent("reply_partial", said.ToString()));
+                }, ct, noTools: true);
+                var words = ToolCommandParser.StripForSpeech(plain.Content);
+                _history.AddTurn(prompt, words);
+                OperationTrail.Leave("local.smalltalk", words.Length.ToString());
+                EventReceived?.Invoke(new BackendEvent("reply_text", words));
+                return words;
+            }
 
             if (AliceLocalToolTriggers.TryMatch(prompt, out var triggeredTool, out var triggeredArgs))
             {
@@ -221,7 +239,10 @@ public sealed class AliceLocalBackend : IVoiceBackend
                 {
                     var result = await ExecuteKnownToolAsync(call.Name, call.ArgumentsJson, ct);
                     messages.Add(new ChatMessage("assistant", BuildToolCall(call.Name, call.ArgumentsJson)));
-                    messages.Add(new ChatMessage("user", $"[TOOL {call.Name} result: {OllamaChatClient.Truncate(result, 4000)}]"));
+                    // One tool is enough for a spoken answer. A second result comes with a firm nudge, because
+                    // an 8B model will otherwise keep calling tools until the turns run out and then apologise.
+                    var nudge = turn == 0 ? "" : " Answer Master now in ordinary speech; call no more tools.";
+                    messages.Add(new ChatMessage("user", $"[TOOL {call.Name} result: {OllamaChatClient.Truncate(result, 4000)}]{nudge}"));
                 }
             }
 
@@ -305,9 +326,9 @@ public sealed class AliceLocalBackend : IVoiceBackend
 
     internal static bool HoldsToolCall(string text) => ToolCommandParser.HoldsToolCall(text);
 
-    private async Task<OllamaCompletion> CompleteAsync(List<ChatMessage> messages, int? maxTokens, Action<string>? onDelta, CancellationToken ct)
+    private async Task<OllamaCompletion> CompleteAsync(List<ChatMessage> messages, int? maxTokens, Action<string>? onDelta, CancellationToken ct, bool noTools = false)
     {
-        if (_nativeTools == false)
+        if (noTools || _nativeTools == false)
             return await _ollama.CompleteAsync(Settings.OllamaUrl, Settings.Model, messages, maxTokens, onDelta, nativeTools: false, ct);
         try
         {

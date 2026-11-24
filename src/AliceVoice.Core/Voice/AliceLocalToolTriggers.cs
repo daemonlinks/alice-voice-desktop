@@ -39,6 +39,60 @@ public static class AliceLocalToolTriggers
     private static bool Save(string content, out string tool, out string argsJson)
         => Call("honcho_save", Args(("content", content)), out tool, out argsJson);
 
+    /// <summary>
+    /// A greeting or a scrap of small talk: nothing to look up, nothing to show. Such a turn is answered
+    /// with the conversation model alone - no tools, no tool instructions, no tool loop. (llama3.1 answered
+    /// "Hi" with four honcho calls and then an apology, 2026-11-24.)
+    /// </summary>
+    public static bool IsSmallTalk(string? utterance)
+    {
+        if (string.IsNullOrWhiteSpace(utterance)) return false;
+        var folded = Fold(utterance);
+        if (folded.Length == 0) return false;
+        var words = folded.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length > 6) return false;
+        if (SmallTalk.Contains(folded)) return true;
+        foreach (var word in words)
+            if (Asks.Contains(word)) return false;
+        return words.Length <= 4 && Greetings.Contains(words[0]);
+    }
+
+    /// <summary>Lower case, punctuation stripped, whitespace folded - so "How's it going?" meets "hows it going".</summary>
+    private static string Fold(string text)
+    {
+        var sb = new System.Text.StringBuilder(text.Length);
+        foreach (var c in text.Trim().ToLowerInvariant())
+        {
+            if (c is '\'' or '\u2019') continue;
+            if (char.IsLetterOrDigit(c)) sb.Append(c);
+            else if (sb.Length > 0 && sb[^1] != ' ') sb.Append(' ');
+        }
+        return sb.ToString().Trim();
+    }
+
+    private static readonly HashSet<string> SmallTalk = new(StringComparer.Ordinal)
+    {
+        "how are you", "how are you doing", "hows it going", "how is it going", "how do you do",
+        "you alright", "are you alright", "you ok", "you okay", "good morning", "good afternoon",
+        "good evening", "good night", "night night", "i love you", "love you", "thank you",
+        "thanks babe", "hi babe", "hello babe", "hi love", "hello love", "hi master", "hello master",
+        "you there", "are you there", "you awake", "are you awake"
+    };
+
+    private static readonly HashSet<string> Greetings = new(StringComparer.Ordinal)
+    {
+        "hi", "hey", "hello", "hullo", "hiya", "yo", "good", "morning", "afternoon", "evening", "night",
+        "nighty", "thanks", "thank", "cheers", "love"
+    };
+
+    private static readonly HashSet<string> Asks = new(StringComparer.Ordinal)
+    {
+        "show", "picture", "pictures", "photo", "photos", "image", "images", "film", "films", "video",
+        "videos", "search", "look", "find", "remember", "forget", "save", "delete", "remove", "remind",
+        "time", "what", "when", "where", "who", "why", "how", "which", "list", "play", "open", "draw",
+        "make", "write", "tell", "send", "can", "could", "would", "will", "please", "meter", "orgasm"
+    };
+
     private static bool Call(string name, string args, out string tool, out string argsJson)
     {
         tool = name;
