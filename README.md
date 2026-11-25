@@ -9,7 +9,6 @@ voice GPU, streamed replies, native audio and structured logging.
 ```
 AliceVoice.sln
 ├── src/
-│   ├── AliceVoice.App/        WinUI 3 desktop shell (UI, DI, startup, crash handlers)
 │   ├── AliceVoice.Core/       Config, logging, GPU selection, faster-whisper STT client,
 │   │                          voice backends (Hermes / Alice LOCAL), SOUL store, self-update
 │   ├── AliceVoice.Audio/      NAudio mic capture + TTS playback, SAPI / Piper / AllTalk TTS
