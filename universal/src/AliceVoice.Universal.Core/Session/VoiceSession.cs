@@ -17,7 +17,7 @@ namespace AliceVoice.Universal.Session;
 
 public enum StageLamp { Dim, Green, Yellow, Red, Wait }
 public enum NoteKind { Dim, Green, Yellow, Red }
-public enum TranscriptKind { User, Alice, System }
+public enum TranscriptKind { User, Alice, Plum, System }
 
 public sealed class TranscriptEntry
 {
@@ -62,6 +62,8 @@ public sealed class VoiceSession : IAsyncDisposable
     private readonly PushToTalkGesture _ptt = new();
     private readonly UtteranceBuffer _utterance = new(minSeconds: 0.3, maxSeconds: 120);
     private readonly Dictionary<string, VoiceProfile> _memberVoices;
+    /// <summary>A facet's own voice slot in the same assignment file: "&lt;target&gt;#plum".</summary>
+    private const string PlumSuffix = "#plum";
     private readonly List<TranscriptEntry> _transcript = new();
     private readonly List<string> _logs = new();
     private readonly object _gate = new();
@@ -83,6 +85,7 @@ public sealed class VoiceSession : IAsyncDisposable
     private DateTime _nextConversationPoll;
     private Action? _stopSpeech;
     private readonly BridgeClientSettings? _bridgeClient;
+    private readonly UiPreferences _prefs;
     private readonly HashSet<string> _ignoredTools = new(StringComparer.Ordinal);
     private bool _ownsImages;
     private bool _turnShowedPicture;
@@ -107,6 +110,9 @@ public sealed class VoiceSession : IAsyncDisposable
         _ownsImages = images is null;
         Images = images ?? CreateImages(host, bridgeClient, s => { AddLog(s); Touch(); }, clock);
         Images.Changed += Touch;
+        _prefs = UiPreferences.Load(host.SettingsFile);
+        SpeakReplies = _prefs.SpeakReplies;
+        FollowConversation = _prefs.FollowConversation;
         if (_conversation is not null) _conversation.Changed += () => ApplySharedSnapshot();
         _clock = clock ?? (() => DateTime.UtcNow);
         _local = localClock ?? (() => DateTime.Now);
@@ -188,6 +194,160 @@ public sealed class VoiceSession : IAsyncDisposable
     public string VoiceLabel { get; private set; } = "—";
     public string ConnectionLabel { get; private set; } = "offline";
     public string SettingsLine { get; private set; } = "";
+
+    /// <summary>Whether replies are spoken aloud. Off = captions only, and nothing is sent to the engine.</summary>
+    public bool SpeakReplies { get; private set; } = true;
+
+    /// <summary>Whether the conversation view follows the newest turn. Off = it stays where he put it.</summary>
+    public bool FollowConversation { get; private set; } = true;
+
+    /// <summary>The TTS switch, top right. Persisted, so it survives a restart.</summary>
+    public void SetSpeakReplies(bool on)
+    {
+        if (SpeakReplies == on) return;
+        SpeakReplies = on;
+        AddLog(on ? "Speech on - replies are spoken" : "Speech off - replies are captions only");
+        _prefs.Save(SpeakReplies, FollowConversation, ShowLog);
+        Touch();
+    }
+
+    /// <summary>The follow switch, beside it: does the view chase the newest turn?</summary>
+    public void SetFollowConversation(bool on)
+    {
+        if (FollowConversation == on) return;
+        FollowConversation = on;
+        AddLog(on ? "Follow on - the view will chase the newest turn" : "Follow off - the view stays where you put it");
+        _prefs.Save(SpeakReplies, FollowConversation, ShowLog);
+        Touch();
+    }
+
+    /// <summary>
+    /// Whether the log dock is open. Master, 2026-11-23: *"I want to toggle on and off the log which
+    /// covers the bottom quarter of the screen."* Closing it gives the conversation that quarter back;
+    /// the dock keeps what is happening now, the route and the timings either way.
+    /// Errors are deliberately NOT a switch: a failure always shows (Master, same message).
+    /// </summary>
+    public bool ShowLog { get; private set; } = true;
+
+    public void SetShowLog(bool on)
+    {
+        if (ShowLog == on) return;
+        ShowLog = on;
+        AddLog(on ? "Log open" : "Log closed - the dock keeps what is happening now");
+        _prefs.Save(SpeakReplies, FollowConversation, ShowLog);
+        Touch();
+    }
+
+    /// <summary>
+    /// Who a typed line is addressed to. <c>[alice_1] what do you think?</c> or <c>@alice_1 ...</c> sends that
+    /// line to HER and leaves the conversation with her, which is how more than two voices share one thread
+    /// without the screen ever being vague about who just spoke. A line with no address goes to whoever is
+    /// selected, exactly as before (Master, 2026-11-23).
+    /// </summary>
+    public static (string? TargetId, string Text) ParseAddress(string? text, IReadOnlyList<SessionTarget> targets)
+    {
+        var trimmed = (text ?? "").Trim();
+        if (trimmed.Length == 0) return (null, trimmed);
+        string name;
+        string rest;
+        if (trimmed[0] == '[' && trimmed.IndexOf(']') is var close && close > 1)
+        {
+            name = trimmed[1..close];
+            rest = trimmed[(close + 1)..].Trim();
+        }
+        else if (trimmed[0] == '@')
+        {
+            var line = trimmed[1..];
+            var stop = line.IndexOfAny(new[] { ' ', '\t', ':', ',' });
+            name = stop < 0 ? line : line[..stop];
+            rest = stop < 0 ? "" : line[(stop + 1)..].Trim();
+        }
+        else
+        {
+            return (null, trimmed);
+        }
+        var id = MatchTarget(name, targets);
+        return id is null ? (null, trimmed) : (id, rest.Length == 0 ? trimmed : rest);
+    }
+
+    /// <summary>A name he would actually say: the id, the label, or just the number she answers to.</summary>
+    private static string? MatchTarget(string name, IReadOnlyList<SessionTarget> targets)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        var needle = name.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+        if (needle is "local" or "alice_local" or "local_alice" or "ollama")
+            foreach (var t in targets)
+                if (string.Equals(t.Id, AliceLocalId, StringComparison.OrdinalIgnoreCase)) return t.Id;
+        foreach (var t in targets)
+            if (string.Equals(t.Id, needle, StringComparison.OrdinalIgnoreCase)) return t.Id;
+        foreach (var t in targets)
+        {
+            var display = (t.DisplayName ?? "").Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+            if (display == needle) return t.Id;
+            if (display.StartsWith(needle + "_", StringComparison.Ordinal)) return t.Id;
+        }
+        if (needle.All(char.IsDigit))
+            foreach (var t in targets)
+                if (t.Id.EndsWith("_" + needle, StringComparison.OrdinalIgnoreCase)) return t.Id;
+        return null;
+    }
+
+    /// <summary>
+    /// The HTML5 page the video half shows. App U has no video control of its own, so the WebView is
+    /// handed a real page with a &lt;video&gt; element in it - exactly what a browser would show him.
+    /// A local file is served by this app's own media endpoint, because a WebView page cannot read
+    /// file:// for itself; an https URL is used as it stands (Master, 2026-11-23).
+    /// </summary>
+    public string BuildVideoPage(string src, string? title)
+    {
+        var url = VideoUrl(src);
+        var caption = System.Net.WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(title) ? "for you" : title);
+        var safe = System.Net.WebUtility.HtmlEncode(url);
+        return "<!doctype html><html><head><meta charset=\"utf-8\"><title>for you</title><style>" +
+               "html,body{margin:0;background:#07070a;color:#e8e8ed;font:13px system-ui,sans-serif}" +
+               "video{width:100%;max-height:420px;background:#000;display:block}" +
+               ".cap{padding:6px 8px;color:#b9b9c4}" +
+               "</style></head><body>" +
+               "<video src=\"" + safe + "\" controls autoplay playsinline preload=\"metadata\"></video>" +
+               "<div class=\"cap\">" + caption + "</div>" +
+               "<div class=\"cap\" id=\"why\"></div>" +
+               "<script>var v=document.querySelector('video');" +
+               "v.addEventListener('error',function(){document.getElementById('why').textContent=" +
+               "'this device cannot play this file here - use Open below';});" +
+               "</script></body></html>";
+    }
+
+    /// <summary>A URL a WebView can fetch: an https address as it stands, or this app's own media endpoint
+    /// for a file on this machine.</summary>
+    public string VideoUrl(string src)
+    {
+        if (src.Contains("://", StringComparison.Ordinal)) return src;
+        var host = _host.BridgeBindHost ?? "127.0.0.1";
+        var port = _host.BridgeBindPort ?? 8765;
+        return $"http://{host}:{port}/v1/media/{MediaShare.ToId(src)}";
+    }
+
+    /// <summary>The typed path for a shared thread: address it, move the conversation if it named someone else,
+    /// then send. Everything else in the app keeps using <see cref="SendTextAsync"/>.</summary>
+    public async Task SendAddressedAsync(string? text, CancellationToken ct = default)
+    {
+        var (target, rest) = ParseAddress(text, Targets);
+        if (target is not null && !string.Equals(target, SelectedTargetId, StringComparison.OrdinalIgnoreCase))
+        {
+            AddLog($"Spoken to {target} - the conversation moves there for this turn");
+            await SelectTargetAsync(target, ct);
+        }
+        await SendTextAsync(string.IsNullOrWhiteSpace(rest) ? text : rest, ct);
+    }
+
+    /// <summary>A surface picture that would not load is said out loud in the app log, never swallowed.</summary>
+    public void NoteSurfaceImageFailed(string src, string reason)
+    {
+        AddLog($"Shared surface: could not load {src} - {reason}");
+        ShowError($"Surface picture failed: {reason}");
+        Touch();
+    }
+
     public bool ShowBridgeEditor => _bridgeClient is not null;
     public string BridgeHost => _bridgeClient?.Host ?? "";
     public string BridgePort => _bridgeClient is null ? "" : _bridgeClient.Port.ToString();
@@ -243,6 +403,7 @@ public sealed class VoiceSession : IAsyncDisposable
         catch (Exception ex) { Log.Warning(ex, "Failed to load voice assignments"); }
         _initializing = false;
         await RestoreVoiceAsync();
+        await EnsureDistinctVoicesAsync(CancellationToken.None);
         await CheckForUpdatesAsync();
         await WarmUpSttAsync();
         Append(TranscriptKind.System, "", SessionCopy.Startup, showRemember: false);
@@ -767,26 +928,61 @@ public sealed class VoiceSession : IAsyncDisposable
         }
         else
         {
-            if (_streamEntry is not null)
+            var blocks = FacetMarkers.Split(reply);
+            if (blocks.Count > 1 || (blocks.Count == 1 && FacetMarkers.HasMarker(reply)))
             {
-                _streamEntry.Text = reply;
-                _streamEntry.ShowRemember = true;
+                // A two-facet turn: one bubble per girl in HER colour, so the split is visible on the
+                // screen, and the streaming bubble that held the raw [Plum] markers goes away
+                // (Master, 2026-11-22).
+                if (_streamEntry is not null) { _transcript.Remove(_streamEntry); _streamEntry = null; }
+                for (var i = 0; i < blocks.Count; i++)
+                {
+                    var (facet, blockText) = blocks[i];
+                    Append(facet == Facet.Plum ? TranscriptKind.Plum : TranscriptKind.Alice,
+                           facet == Facet.Plum ? "Plum" : target, blockText, showRemember: i == blocks.Count - 1);
+                }
             }
-            else Append(TranscriptKind.Alice, target, string.IsNullOrWhiteSpace(reply) && _turnShowedPicture ? "\U0001F5BC picture" : reply, showRemember: true);
+            else
+            {
+                var plain = FacetMarkers.Strip(reply);
+                if (_streamEntry is not null)
+                {
+                    _streamEntry.Text = plain;
+                    _streamEntry.ShowRemember = true;
+                }
+                else Append(TranscriptKind.Alice, target, string.IsNullOrWhiteSpace(plain) && _turnShowedPicture ? "\U0001F5BC picture" : plain, showRemember: true);
+            }
             _streamTurnId = 0;
             _streamEntry = null;
         }
         LlmLamp = StageLamp.Green;
 
         long ttsMs = 0;
-        if (!string.IsNullOrWhiteSpace(reply))
+        if (!string.IsNullOrWhiteSpace(reply) && !SpeakReplies)
+        {
+            // The switch is off: the words are on screen, and the engine is never asked.
+            AddLog("Speech off: the reply is on screen, not spoken");
+            SetActivity("Ready");
+        }
+        else if (!string.IsNullOrWhiteSpace(reply))
         {
             StatusText = "Speaking…";
             SetActivity("Speaking…", target);
             TtsLamp = StageLamp.Green;
             Touch();
             var tts = Stopwatch.StartNew();
-            try { await _providers.SpeakAsync(CurrentProfile, reply, ct); }
+            try
+            {
+                // Her block borrows HER voice, and the next block hands alice_voice's settings straight
+                // back - a temporary override, never a change to what he chose (Master, 2026-11-22).
+                var speech = FacetMarkers.Split(reply);
+                if (speech.Count == 0) speech.Add((Facet.Alice, reply));
+                foreach (var (facet, spoken) in speech)
+                {
+                    if (facet == Facet.Plum) AddLog($"Plum speaks: {ProfileFor(facet)}");
+                    await _providers.SpeakAsync(await ProfileForAsync(facet, ct), spoken, ct);
+                }
+            }
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
@@ -826,10 +1022,10 @@ public sealed class VoiceSession : IAsyncDisposable
                 {
                     if (_streamEntry is null)
                     {
-                        _streamEntry = Append(TranscriptKind.Alice, TargetName, partial, showRemember: false);
+                        _streamEntry = Append(TranscriptKind.Alice, TargetName, FacetMarkers.Strip(partial), showRemember: false);
                         if (_conversation is not null && IsAliceLocal) _streamEntry.PendingShared = true;
                     }
-                    else _streamEntry.Text = partial;
+                    else _streamEntry.Text = FacetMarkers.Strip(partial);
                     LlmLamp = StageLamp.Green;
                     Touch();
                 }
@@ -876,6 +1072,124 @@ public sealed class VoiceSession : IAsyncDisposable
     }
 
     private VoiceProfile CurrentProfile => new(SelectedProvider ?? VoiceProviderKind.Sapi, SelectedVoice);
+
+    /// <summary>Whose voice a block speaks with, without allocating anything (for the log line).</summary>
+    private string ProfileFor(Facet facet) =>
+        facet == Facet.Plum && _memberVoices.TryGetValue(FacetKey(facet), out var plum) && !string.IsNullOrWhiteSpace(plum.Voice)
+            ? plum.Voice
+            : SelectedVoice;
+
+    /// <summary>
+    /// Alice speaks in the member's own settings; Plum has her own slot beside them, and reaching for it
+    /// is a temporary override for the length of her block (Master, 2026-11-22).
+    /// </summary>
+    private async Task<VoiceProfile> ProfileForAsync(Facet facet, CancellationToken ct)
+    {
+        if (facet != Facet.Plum) return CurrentProfile;
+        if (_memberVoices.TryGetValue(FacetKey(facet), out var plum) && !string.IsNullOrWhiteSpace(plum.Voice)) return plum;
+        return await AllocateFacetVoiceAsync(facet, ct) ?? CurrentProfile;
+    }
+
+    /// <summary>
+    /// Nobody has ever chosen a voice for this facet, so the policy picks one: the next UNUSED female
+    /// voice, best quality first, and it is remembered from then on (Master, 2026-11-22). If every
+    /// female voice the provider offers is already taken, she speaks in the current voice instead of
+    /// quietly stealing another girl's.
+    /// </summary>
+    private async Task<VoiceProfile?> AllocateFacetVoiceAsync(Facet facet, CancellationToken ct)
+    {
+        if (SelectedProvider is not { } kind) return null;
+        try
+        {
+            var provider = _providers.Providers.FirstOrDefault(p => p.Kind == kind);
+            if (provider is null) return null;
+            var catalogue = (await provider.ListVoicesAsync(ct)).ToList();
+            if (catalogue.Count == 0)
+            {
+                AddLog($"{facet}: no voice list to allocate from - speaking with alice_voice's voice");
+                return null;
+            }
+            var mine = FacetKey(facet);
+            var used = _memberVoices
+                .Where(kv => !kv.Key.Equals(mine, StringComparison.OrdinalIgnoreCase))
+                .Select(kv => kv.Value.Voice);
+            var chosen = VoicePolicy.NextUnusedFemale(used, catalogue);
+            if (chosen is null)
+            {
+                AddLog($"{facet}: every unused female voice is already taken - speaking with alice_voice's voice");
+                return null;
+            }
+            var profile = new VoiceProfile(kind, chosen);
+            _memberVoices[mine] = profile;
+            SaveVoices();
+            AddLog($"Voice allocated: {chosen} -> {facet} (next unused female, best quality first)");
+            return profile;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Facet voice allocation failed");
+            return null;
+        }
+    }
+
+    /// <summary>Plum keeps her own slot in the same assignment file: "&lt;target&gt;#plum".</summary>
+    private string FacetKey(Facet facet) => SelectedTargetId + (facet == Facet.Plum ? PlumSuffix : "");
+
+    /// <summary>
+    /// One voice per backend, so Master can tell who is answering with his ears alone (Master,
+    /// 2026-11-22: "it would be nice if the voices were different for all backends to avoid confusing me").
+    /// A backend that already has a voice keeps it; anything missing, or already claimed by a backend
+    /// earlier in the roster, is given the next unused female voice - best quality first, spilling into the
+    /// next engine when one catalogue runs out, so every backend still ends up sounding like itself.
+    /// Facet slots ("#plum") are left to their own lazy allocation, which already avoids every voice here.
+    /// </summary>
+    private async Task EnsureDistinctVoicesAsync(CancellationToken ct)
+    {
+        try
+        {
+            var catalogues = new List<(VoiceProviderKind Provider, IReadOnlyList<string> Voices)>();
+            foreach (var provider in _providers.Providers)
+            {
+                try { catalogues.Add((provider.Kind, await provider.ListVoicesAsync(ct))); }
+                catch (Exception ex) { Log.Warning(ex, "Voice list unavailable: {Provider}", provider.DisplayName); }
+            }
+            if (catalogues.Count == 0) return;
+
+            var claimed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var changed = 0;
+            foreach (var target in Targets)
+            {
+                var mine = _memberVoices.TryGetValue(target.Id, out var profile) && !string.IsNullOrWhiteSpace(profile.Voice)
+                    ? profile
+                    : null;
+                // His own choice is kept - but only if it IS one of the girls' voices and no other backend
+                // already has it. A male voice (AllTalk offers arnold, Clint Eastwood, ...) would defeat the
+                // whole point of this pass, so it is moved onto a female one (Master, 2026-11-22).
+                if (mine is not null && VoicePolicy.LooksFemale(mine.Voice) && claimed.Add(VoicePolicy.Normalise(mine.Voice))) continue;
+
+                var pick = VoicePolicy.NextDistinctFemale(claimed, catalogues, mine?.Provider ?? SelectedProvider);
+                if (pick is null)
+                {
+                    AddLog($"Voices: nothing left for {target.DisplayName} - it speaks in the current voice");
+                    continue;
+                }
+                _memberVoices[target.Id] = new VoiceProfile(pick.Value.Provider, pick.Value.Voice);
+                claimed.Add(VoicePolicy.Normalise(pick.Value.Voice));
+                changed++;
+                AddLog($"Voice: {target.DisplayName} -> {VoicePolicy.Normalise(pick.Value.Voice)}"
+                       + (mine is null ? " (allocated: next unused female)" : " (moved: that voice was another backend's)"));
+            }
+            if (changed > 0)
+            {
+                SaveVoices();
+                AddLog($"Voices: {changed} backend(s) given their own voice - no two of them sound alike now");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "The distinct-voice pass failed");
+        }
+    }
 
     private async Task RestoreVoiceAsync()
     {
@@ -1217,7 +1531,7 @@ public sealed class VoiceSession : IAsyncDisposable
             Text = text,
             Turn = _turnSeq,
             At = new DateTimeOffset(_local()),
-            ShowRemember = showRemember && kind == TranscriptKind.Alice,
+            ShowRemember = showRemember && kind is TranscriptKind.Alice or TranscriptKind.Plum,
             RememberEnabled = IsAliceLocal,
             RememberLabel = "♥ remember"
         };

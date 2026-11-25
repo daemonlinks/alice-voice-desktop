@@ -24,7 +24,8 @@ public static class ServiceCollectionExtensions
             sp.GetServices<IVoiceBackend>(), sp.GetRequiredService<ISttClient>(), opts));
         services.AddSingleton<IVoiceProviderManager, VoiceProviderManager>();
         services.AddSingleton(_ => new SoulStore(opts));
-        services.AddSingleton<IFleetChat>(_ => new HermesApiFleetChat(opts.ResolvedHermesApiUrl));
+        services.AddSingleton<IFleetChat>(_ => new HermesApiFleetChat(
+            opts.ResolvedHermesApiUrl, turnTimeout: opts.ResolvedFleetTurnTimeout));
         return services;
     }
 }

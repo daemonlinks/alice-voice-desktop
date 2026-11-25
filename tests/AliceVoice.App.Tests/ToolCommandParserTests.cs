@@ -78,4 +78,61 @@ public class ToolCommandParserTests
         for (var i = 0; i < 100; i++) ToolCommandParser.Parse(reply);
         Assert.True(sw.Elapsed.TotalMilliseconds / 100 < 5, $"parse took {sw.Elapsed.TotalMilliseconds / 100:0.000} ms");
     }
+
+    // The shape a model that has only ever seen OpenAI function calls writes. It reached Master's ear as
+    // raw JSON on 2026-11-24 - "Hi" answered with {"name": "gui_list_pictures", "parameters": {}}.
+    [Fact]
+    public void OpenAiSpelledCallIsRunAndNeverSpoken()
+    {
+        var p = ToolCommandParser.Parse("{\"name\": \"gui_list_pictures\", \"parameters\": {}}");
+        Assert.Single(p.Commands);
+        Assert.Equal("gui_list_pictures", p.Commands[0].Tool);
+        Assert.Equal("{}", p.Commands[0].ArgsJson);
+        Assert.Equal("", p.Prose);
+    }
+
+    [Fact]
+    public void OpenAiStringArgumentsAreUnwrapped()
+    {
+        var p = ToolCommandParser.Parse("{\"name\":\"gui_show_image\",\"arguments\":\"{\\\"src\\\":\\\"a.png\\\"}\"}");
+        Assert.Single(p.Commands);
+        Assert.Equal("gui_show_image", p.Commands[0].Tool);
+        Assert.Contains("a.png", p.Commands[0].ArgsJson);
+        Assert.Equal("", p.Prose);
+    }
+
+    [Fact]
+    public void WrappedFunctionCallsAreParsed()
+    {
+        var p = ToolCommandParser.Parse("{\"function\":{\"name\":\"gui_image_clear\",\"arguments\":{}},\"id\":\"call_1\"}");
+        Assert.Single(p.Commands);
+        Assert.Equal("gui_image_clear", p.Commands[0].Tool);
+        Assert.Equal("", p.Prose);
+    }
+
+    [Fact]
+    public void ProseWithAnOpenAiSpelledCallKeepsTheWordsOnly()
+    {
+        var p = ToolCommandParser.Parse("Let me look. {\"name\": \"gui_list_pictures\", \"parameters\": {}} There.");
+        Assert.Single(p.Commands);
+        Assert.Equal("Let me look. There.", p.Prose);
+        Assert.DoesNotContain("parameters", p.Prose);
+    }
+
+    // A plain JSON object that happens to carry a name is not a tool call and must survive untouched.
+    [Fact]
+    public void OrdinaryJsonWithANameIsNotAToolCall()
+    {
+        var p = ToolCommandParser.Parse("{\"name\": \"Master\", \"age\": 52}");
+        Assert.Empty(p.Commands);
+        Assert.Contains("Master", p.Prose);
+    }
+
+    [Fact]
+    public void ACallNamingNoToolIsRecognisedAsUnspeakableJson()
+    {
+        Assert.True(AliceLocalBackend.LooksLikeToolJson("{\"name\": \"wibble_wobble\", \"parameters\": {}}"));
+        Assert.False(AliceLocalBackend.LooksLikeToolJson("Hello Master, I am here."));
+        Assert.False(AliceLocalBackend.LooksLikeToolJson("{\"colour\": \"red\"}"));
+    }
 }

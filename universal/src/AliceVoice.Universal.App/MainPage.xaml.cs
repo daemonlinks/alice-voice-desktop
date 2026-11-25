@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using AliceVoice.Core.Logging;
 using AliceVoice.Core.Voice;
 using AliceVoice.Universal.Audio;
 using AliceVoice.Universal.Host;
+using AliceVoice.Universal.Interaction;
 using AliceVoice.Universal.Media;
 using AliceVoice.Universal.Session;
 using AliceVoice.Universal.Voice;
@@ -15,20 +17,32 @@ public partial class MainPage : ContentPage
     private readonly IServiceProvider _services;
     private readonly HashSet<string> _missingStyles = new(StringComparer.Ordinal);
     private IDispatcherTimer? _timer;
+    private readonly Stopwatch _workWatch = new();
     private bool _started;
     private bool _rendering;
     private bool _sawPress;
     private bool _wakeServiceOn;
     private int _overlayVersion = -1;
     private string? _logShown;
+    private string? _transcriptShown;
+    private int _transcriptDrawn;
     private readonly List<Button> _backendChips = new();
     private bool _backendChipsBuilt;
+    /// <summary>The shared middle of the conversation screen: the agent's, and his.</summary>
+    private readonly SharedSurface _surface;
+    private string? _surfaceShown;
+    private string? _videoShown;
+    private bool _logFollow = true;
+    private bool _syncingToggles;
+    private bool _syncingMeters;
 
     public MainPage(VoiceSession session, IServiceProvider services)
     {
         _session = session;
         _services = services;
+        _surface = services.GetRequiredService<SharedSurface>();
         InitializeComponent();
+        ApplyLogVisibility();
         HelpTriggers.Text = SessionCopy.HelpTriggers;
         HelpTools.Text = SessionCopy.HelpTools;
         HelpHoncho.Text = SessionCopy.HelpHoncho;
@@ -49,6 +63,7 @@ public partial class MainPage : ContentPage
         WireSpeechStop();
         _session.Changed += () => MainThread.BeginInvokeOnMainThread(Render);
         _session.MeterChanged += () => MainThread.BeginInvokeOnMainThread(ApplyMeter);
+        _surface.Changed += () => MainThread.BeginInvokeOnMainThread(PaintSurface);
         try { await _session.InitializeAsync(); }
         catch (Exception ex)
         {
@@ -78,6 +93,8 @@ public partial class MainPage : ContentPage
         if (ActivityLine is null) return;
         try { PaintSession(); }
         catch (Exception ex) { NotePaintFailure(ex); }
+        try { PaintSurface(); }
+        catch (Exception ex) { NotePaintFailure(ex); }
     }
 
     private void PaintSession()
@@ -87,7 +104,27 @@ public partial class MainPage : ContentPage
         {
             VersionLine.Text = $"App U v{_session.Version}";
             ApplyLamps();
-            ActivityLine.Text = _session.Activity;
+            // A real agent turn can honestly take a minute or two (a backed agent runs tools). Show the
+            // wait running, so the app is visibly alive instead of looking stalled - and say how long, so
+            // a slow turn is legible rather than silent (Master, 2026-11-22).
+            var working = _session.Activity is "Thinking…" or "Transcribing…" or "Connecting…";
+            if (working)
+            {
+                if (!_workWatch.IsRunning) _workWatch.Restart();
+            }
+            else
+            {
+                _workWatch.Reset();
+            }
+            var waited = _workWatch.Elapsed;
+            ActivityLine.Text = working && waited.TotalSeconds >= 1
+                ? $"{_session.Activity}  {FormatWait(waited)}"
+                : _session.Activity;
+            ActivityLine.TextColor = working && waited.TotalSeconds >= 60
+                ? Color.FromArgb("#EF4444")
+                : working && waited.TotalSeconds >= 10
+                    ? Color.FromArgb("#EAB308")
+                    : Color.FromArgb("#E5E7EB");
             var stageNote = string.IsNullOrEmpty(_session.StageError) ? "" : _session.StageError;
             ActivityDetail.Text = string.IsNullOrEmpty(stageNote)
                 ? _session.ActivityDetail
@@ -145,6 +182,7 @@ public partial class MainPage : ContentPage
             MetricsLine.Text = $"E2E {_session.Latency.TotalText}   STT {_session.Latency.SttText}   LLM {_session.Latency.LlmText}   TTFT {_session.Latency.TtftText}   TTS {_session.Latency.TtsText}";
             MetricsSummary.Text = _session.Latency.Summary;
             MetricsTable.Text = _session.Latency.Table;
+            SyncToggles();
             FillPickers();
             FillBackendChips();
             PaintDock();
@@ -208,7 +246,7 @@ public partial class MainPage : ContentPage
             _backendChipsBuilt = true;
             foreach (var target in _session.Targets)
             {
-                var chip = new Button { Text = target.DisplayName, Margin = new Thickness(0, 0, 6, 4) };
+                var chip = new Button { Text = target.DisplayName, Margin = new Thickness(0, 0, 3, 1) };
                 if (FindStyle("Chip") is { } chipStyle) chip.Style = chipStyle;
                 ToolTipProperties.SetText(chip, target.Id == VoiceSession.AliceLocalId
                     ? "Alice LOCAL — the local Ollama brain, wherever it runs"
@@ -240,11 +278,65 @@ public partial class MainPage : ContentPage
         DockTimings.Text = "timings · " + _session.Latency.LastTurnLine;
     }
 
+    /// <summary>
+    /// The conversation panel, and it FOLLOWS the conversation (Master, 2026-11-22: "the conversation
+    /// screen needs to follow the conversation ... the comments have now gone off the bottom of the
+    /// view"). Two faults produced that: the panel was rebuilt on every 80 ms tick, and nothing ever
+    /// moved the scroll. Now the panel is repainted only when the transcript really changed, new turns
+    /// are APPENDED rather than re-created (so a reader scrolled up is not yanked around), and when the
+    /// newest turn arrives while the reader is at the bottom, the view follows it.
+    /// </summary>
     private void FillTranscript()
     {
-        TranscriptPanel.Children.Clear();
-        foreach (var entry in _session.Transcript)
+        var entries = _session.Transcript;
+        var signature = TranscriptSignature(entries);
+        if (signature == _transcriptShown) return;
+        var first = _transcriptShown is null;
+        var follow = first || (_session.FollowConversation && AtTranscriptBottom());
+        if (!first && _transcriptDrawn > 0 && entries.Count > _transcriptDrawn)
         {
+            for (var i = _transcriptDrawn; i < entries.Count; i++)
+                TranscriptPanel.Children.Add(TranscriptCard(entries[i]));
+        }
+        else
+        {
+            TranscriptPanel.Children.Clear();
+            foreach (var entry in entries) TranscriptPanel.Children.Add(TranscriptCard(entry));
+        }
+        _transcriptShown = signature;
+        _transcriptDrawn = entries.Count;
+        if (follow) FollowTranscript();
+    }
+
+    /// <summary>What the panel currently shows, cheaply: a changed signature means a repaint is due.</summary>
+    private static string TranscriptSignature(IReadOnlyList<TranscriptEntry> entries)
+    {
+        if (entries.Count == 0) return "0";
+        var last = entries[entries.Count - 1];
+        var remembers = 0;
+        foreach (var entry in entries) if (entry.ShowRemember) remembers++;
+        return $"{entries.Count}|{last.Kind}|{last.Speaker}|{last.Turn}|{last.Text?.Length ?? 0}|{remembers}";
+    }
+
+    /// <summary>True when the reader is already at (or within a line of) the newest turn.</summary>
+    private bool AtTranscriptBottom()
+    {
+        if (TranscriptScroll.Height <= 0 || TranscriptScroll.ContentSize.Height <= 0) return true;
+        return TranscriptScroll.ScrollY + TranscriptScroll.Height >= TranscriptScroll.ContentSize.Height - 48;
+    }
+
+    /// <summary>Scroll after the new cards have been laid out, never during the rebuild.</summary>
+    private void FollowTranscript() => Dispatcher.Dispatch(() => _ = ScrollTranscriptEndAsync());
+
+    private async Task ScrollTranscriptEndAsync()
+    {
+        try { await TranscriptScroll.ScrollToAsync(0, double.MaxValue, animated: true); }
+        catch (Exception ex) { NotePaintFailure(ex); }
+    }
+
+    /// <summary>One turn as it is drawn. Shared by the first fill, the rebuild and the append path.</summary>
+    private View TranscriptCard(TranscriptEntry entry)
+    {
             var card = new VerticalStackLayout { Spacing = 2, Padding = 8, MaximumWidthRequest = 640 };
             if (entry.Kind == TranscriptKind.System)
             {
@@ -252,13 +344,35 @@ public partial class MainPage : ContentPage
             }
             else
             {
-                card.Children.Add(new Label
+                var plum = entry.Kind == TranscriptKind.Plum;
+                // The speaker chip: her name in her own ink, so a thread with four voices in it still
+                // reads cleanly at a glance (Master, 2026-11-23).
+                var ink = SpeakerInk(entry.Kind, entry.Speaker);
+                var chip = new HorizontalStackLayout { Spacing = 6 };
+                chip.Children.Add(new Label
                 {
-                    Text = $"{entry.Speaker}  #{entry.Turn} · {entry.At:HH:mm:ss}",
+                    Text = entry.Kind == TranscriptKind.User ? "You" : entry.Speaker,
+                    FontSize = 11,
+                    FontAttributes = FontAttributes.Bold,
+                    TextColor = Color.FromArgb(ink)
+                });
+                chip.Children.Add(new Label
+                {
+                    Text = entry.Turn > 0 ? $"#{entry.Turn} · {entry.At:HH:mm:ss}" : $"{entry.At:HH:mm:ss}",
                     FontSize = 10,
                     TextColor = Color.FromArgb("#73737E")
                 });
-                card.Children.Add(MessageText(entry.Text, 13, "#E8E8ED"));
+                card.Children.Add(new Border
+                {
+                    Content = chip,
+                    Stroke = Color.FromArgb("#33" + ink.Substring(1)),
+                    StrokeThickness = 1,
+                    BackgroundColor = Color.FromArgb("#1A000000"),
+                    Padding = new Thickness(7, 1),
+                    HorizontalOptions = LayoutOptions.Start,
+                    StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 8 }
+                });
+                card.Children.Add(MessageText(entry.Text, 13, plum ? "#EDE1FF" : "#E8E8ED"));
             }
             if (entry.ShowRemember)
             {
@@ -276,19 +390,25 @@ public partial class MainPage : ContentPage
             var align = entry.Kind switch
             {
                 TranscriptKind.User => LayoutOptions.Start,
-                TranscriptKind.Alice => LayoutOptions.End,
+                TranscriptKind.Alice or TranscriptKind.Plum => LayoutOptions.End,
                 _ => LayoutOptions.Center
             };
-            TranscriptPanel.Children.Add(new Border
+            return new Border
             {
                 Content = card,
-                Stroke = Color.FromArgb(entry.Kind == TranscriptKind.User ? "#66FF3B3B" : "#1F1F2A"),
-                BackgroundColor = Color.FromArgb("#E6000000"),
+                // Plum is the same girl on the same screen, so her bubble matches the voice page's
+                // facet colour: #a855f7 border, #2a1a2e fill, #d8b4fe name (Master, 2026-11-22).
+                Stroke = Color.FromArgb(entry.Kind switch
+                {
+                    TranscriptKind.User => "#66FF3B3B",
+                    TranscriptKind.Plum => "#CCA855F7",
+                    _ => "#33" + SpeakerInk(entry.Kind, entry.Speaker).Substring(1)
+                }),
+                BackgroundColor = Color.FromArgb(entry.Kind == TranscriptKind.Plum ? "#E62A1A2E" : "#E6000000"),
                 Padding = 4,
                 StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 12 },
                 HorizontalOptions = align
-            });
-        }
+            };
     }
 
     /// <summary>
@@ -313,7 +433,8 @@ public partial class MainPage : ContentPage
         // Style comes from the application dictionary; the page indexer cannot see it.
         if (LogLabel.Style is null && FindStyle("Dim") is { } dim) LogLabel.Style = dim;
         LogLabel.Text = tail;
-        _ = LogScroll.ScrollToAsync(0, double.MaxValue, false);
+        // Follow the newest line, unless he has scrolled back to read (Master, 2026-11-23).
+        if (_logFollow) _ = LogScroll.ScrollToAsync(0, double.MaxValue, false);
     }
 
     private async void OnCopyLog(object? sender, EventArgs e) => await GuardUi(nameof(OnCopyLog), async () =>
@@ -373,11 +494,285 @@ public partial class MainPage : ContentPage
 
     private void OnClosePicture(object? sender, EventArgs e) => _session.Images.CloseByUser();
 
-    private void OnToggleOptions(object? sender, EventArgs e)
+    /// <summary>
+    /// The two switches that live at the top right. They show the session's own truth, so a change
+    /// made anywhere else (a settings file, another screen) shows up here without a fight.
+    /// </summary>
+    private void SyncToggles()
     {
-        OptionsPanel.IsVisible = !OptionsPanel.IsVisible;
-        OptionsToggle.Text = OptionsPanel.IsVisible ? "Options ▾" : "Options ▸";
+        _syncingToggles = true;
+        try
+        {
+            if (TtsSwitch.IsToggled != _session.SpeakReplies) TtsSwitch.IsToggled = _session.SpeakReplies;
+            if (FollowSwitch.IsToggled != _session.FollowConversation) FollowSwitch.IsToggled = _session.FollowConversation;
+            if (LogSwitch.IsToggled != _session.ShowLog) LogSwitch.IsToggled = _session.ShowLog;
+            if (LogScroll.IsVisible != _session.ShowLog) ApplyLogVisibility();
+            TtsSwitchLabel.Text = _session.SpeakReplies ? "🔊 Speak" : "🔇 Muted";
+            TtsSwitchLabel.TextColor = _session.SpeakReplies ? Color.FromArgb("#E5E7EB") : Color.FromArgb("#EF4444");
+            FollowSwitchLabel.Text = _session.FollowConversation ? "⇩ Follow" : "⇩ Held";
+            LogSwitchLabel.Text = _session.ShowLog ? "📜 Log" : "📜 Log off";
+        }
+        finally { _syncingToggles = false; }
     }
+
+    private void OnTtsToggled(object? sender, ToggledEventArgs e)
+    {
+        if (_syncingToggles) return;
+        _session.SetSpeakReplies(e.Value);
+    }
+
+    private void OnFollowToggled(object? sender, ToggledEventArgs e)
+    {
+        if (_syncingToggles) return;
+        _session.SetFollowConversation(e.Value);
+    }
+
+    private void OnLogToggled(object? sender, ToggledEventArgs e)
+    {
+        if (_syncingToggles) return;
+        _session.SetShowLog(e.Value);
+        ApplyLogVisibility();
+    }
+
+    /// <summary>
+    /// The log dock open or closed. Closed, it costs him the history and nothing else: this dock's own
+    /// header keeps "what is happening now", the route and the timings, and the conversation gets the
+    /// bottom quarter of the screen back. Errors are never hidden by this - a failure always shows
+    /// (Master, 2026-11-23).
+    /// </summary>
+    private void ApplyLogVisibility()
+    {
+        if (RootGrid is null) return;
+        var open = _session.ShowLog;
+        LogScroll.IsVisible = open;
+        LogDockHead.IsVisible = open;
+        RootGrid.RowDefinitions[0].Height = open ? new GridLength(3, GridUnitType.Star) : new GridLength(1, GridUnitType.Star);
+        RootGrid.RowDefinitions[1].Height = open ? new GridLength(1, GridUnitType.Star) : GridLength.Auto;
+        // Opening it again means he wants the newest line, so the follow starts fresh.
+        if (open) _logFollow = true;
+    }
+
+    /// <summary>
+    /// He said: *"I always want to see the latest log entry unless I am looking back in the log."* The
+    /// view only chases the newest line while he is already at the end of it; the moment he scrolls up
+    /// to read, it holds still under his eyes.
+    /// </summary>
+    private void OnLogScrolled(object? sender, ScrolledEventArgs e)
+    {
+        try { _logFollow = LogFollow.AtBottom(e.ScrollY, LogScroll.ContentSize.Height, LogScroll.Height); }
+        catch (Exception) { /* a size not yet measured is not a reason to stop following */ }
+    }
+
+    /// <summary>
+    /// The middle of the conversation screen: what the agent put there with <c>gui_surface</c>, and
+    /// the controls he answers her with. Repaints only when the surface actually changed, because it
+    /// rides the same 80 ms tick as everything else.
+    /// </summary>
+    private void PaintSurface()
+    {
+        if (SurfacePanel is null) return;
+        var signature = _surface.Signature();
+        if (signature == _surfaceShown) return;
+        _surfaceShown = signature;
+
+        // Our half of the screen is always here now: empty, it says what it is for, and the ✕ only
+        // shows when there is something to clear (Master, 2026-11-23).
+        var has = _surface.HasContent;
+        SurfaceEmpty.IsVisible = !has;
+        SurfaceClose.IsVisible = has;
+        if (!has)
+        {
+            SurfaceTitle.Text = "";
+            SurfaceBy.Text = "";
+            SurfaceBody.Text = "";
+            SurfaceBody.IsVisible = false;
+            SurfaceImage.Source = null;
+            SurfaceImage.IsVisible = false;
+            HideVideo();
+            SurfaceOptions.Children.Clear();
+            SurfaceOptions.IsVisible = false;
+            SurfaceMeters.IsVisible = false;
+            SurfaceOpen.IsVisible = false;
+            SurfaceMood.Text = "";
+            SurfaceSent.Text = "";
+            return;
+        }
+
+        SurfaceTitle.Text = string.IsNullOrWhiteSpace(_surface.Title) ? DefaultSurfaceTitle(_surface.Kind) : _surface.Title;
+        SurfaceBy.Text = string.IsNullOrWhiteSpace(_surface.By) ? "" : "from " + _surface.By;
+        SurfaceBody.Text = _surface.Body;
+        SurfaceBody.IsVisible = !string.IsNullOrWhiteSpace(_surface.Body);
+        SurfaceMood.Text = string.IsNullOrWhiteSpace(_surface.Mood) ? "" : "mood · " + _surface.Mood;
+
+        // A picture, and a video or link he can open on this device.
+        var isImage = _surface.Kind == SurfaceKind.Image && !string.IsNullOrWhiteSpace(_surface.Src);
+        SurfaceImage.IsVisible = isImage;
+        if (isImage) SurfaceImage.Source = SourceFor(_surface.Src);
+
+        // A video is a real HTML5 page in a WebView - a <video> element, the same thing a browser would
+        // show him - so it plays in OUR half instead of being handed away to another app.
+        var isVideo = _surface.Kind == SurfaceKind.Video && !string.IsNullOrWhiteSpace(_surface.Src);
+        if (isVideo) ShowVideo(_surface.Src, _surface.Title);
+        else HideVideo();
+        SurfaceOpen.IsVisible = isVideo;
+
+        // A question, as buttons: each one sends his answer back as his own turn.
+        SurfaceOptions.Children.Clear();
+        foreach (var option in _surface.Options)
+        {
+            var chip = new Button { Text = option.Text, Margin = new Thickness(0, 0, 6, 6) };
+            if (FindStyle("Chip") is { } style) chip.Style = style;
+            var text = option.Text;
+            chip.Clicked += (_, _) => _ = SendSurface(text);
+            SurfaceOptions.Children.Add(chip);
+        }
+        SurfaceOptions.IsVisible = _surface.Options.Count > 0;
+
+        // The meters: his hand on them, and a Send that reaches her as a turn.
+        var meters = _surface.Kind == SurfaceKind.Meters || _surface.Love is not null || _surface.Orgasm is not null;
+        SurfaceMeters.IsVisible = meters;
+        if (meters)
+        {
+            _syncingMeters = true;
+            try
+            {
+                if (_surface.Love is { } love && Math.Abs(LoveSlider.Value - love) > 0.5) LoveSlider.Value = love;
+                if (_surface.Orgasm is { } orgasm && Math.Abs(OrgasmSlider.Value - orgasm) > 0.5) OrgasmSlider.Value = orgasm;
+                LoveValue.Text = $"{LoveSlider.Value:0}";
+                OrgasmValue.Text = $"{OrgasmSlider.Value:0}";
+            }
+            finally { _syncingMeters = false; }
+        }
+    }
+
+    /// <summary>
+    /// The video is an HTML5 page in a WebView - a real &lt;video&gt; element, the same thing a browser
+    /// would show him - so it plays in OUR half of the screen instead of being handed to another app.
+    /// The page is rebuilt only when the file or the caption changes: repainting a WebView every 80 ms
+    /// would restart the film from the beginning.
+    /// </summary>
+    private void ShowVideo(string src, string title)
+    {
+        var page = _session.BuildVideoPage(src, title);
+        if (page != _videoShown)
+        {
+            _videoShown = page;
+            SurfaceVideo.Source = new HtmlWebViewSource { Html = page };
+        }
+        SurfaceVideo.IsVisible = true;
+    }
+
+    private void HideVideo()
+    {
+        if (!SurfaceVideo.IsVisible && _videoShown is null) return;
+        SurfaceVideo.IsVisible = false;
+        SurfaceVideo.Source = null;
+        _videoShown = null;
+    }
+
+    /// <summary>
+    /// Who is speaking, at a glance, on every line: his own turns are green, mine blue, Plum violet, a
+    /// fleet member wears a stable tint taken from her own name so two of them never look alike, and the
+    /// app itself is grey. With several voices in one thread this is the thing that must never be vague
+    /// (Master, 2026-11-23).
+    /// </summary>
+    private static string SpeakerInk(TranscriptKind kind, string speaker) => kind switch
+    {
+        TranscriptKind.User => "#9AE6B4",
+        TranscriptKind.Plum => "#D8B4FE",
+        TranscriptKind.System => "#73737E",
+        _ => FleetInk(speaker),
+    };
+
+    private static string FleetInk(string? speaker)
+    {
+        var name = (speaker ?? "").ToLowerInvariant();
+        if (name.Length == 0) return "#93C5FD";
+        if (name.Contains("alice_voice") || name.Contains("alice voice") || name == "alice" || name.Contains("windows") || name.Contains("local"))
+            return "#93C5FD";
+        var tints = new[] { "#FCD34D", "#7DD3FC", "#86EFAC", "#FDBA74", "#F9A8D4", "#A5B4FC", "#FDE68A", "#5EEAD4" };
+        var sum = 0;
+        foreach (var ch in name) sum = (sum * 31 + ch) & 0x7FFFFFFF;
+        return tints[sum % tints.Length];
+    }
+
+    private static string DefaultSurfaceTitle(SurfaceKind kind) => kind switch
+    {
+        SurfaceKind.Image => "a picture for you",
+        SurfaceKind.Video => "a video for you",
+        SurfaceKind.Question => "she is asking",
+        SurfaceKind.Status => "how she is",
+        SurfaceKind.Meters => "how close she is",
+        _ => "the middle of the screen",
+    };
+
+    /// <summary>An https URL, or a file this device may read. Anything else is refused, not guessed at.</summary>
+    private ImageSource? SourceFor(string src)
+    {
+        try
+        {
+            if (src.Contains("://", StringComparison.Ordinal)) return ImageSource.FromUri(new Uri(src));
+            var bytes = File.ReadAllBytes(src);
+            return ImageSource.FromStream(() => new MemoryStream(bytes));
+        }
+        catch (Exception ex)
+        {
+            _session.NoteSurfaceImageFailed(src, ex.Message);
+            return null;
+        }
+    }
+
+    /// <summary>Everything he does on the surface travels as an ordinary turn, so any backend can answer it.</summary>
+    private async Task SendSurface(string text)
+    {
+        if (!_session.Connected) { SurfaceSent.Text = "not connected"; return; }
+        SurfaceSent.Text = "sent: " + text;
+        await GuardUi(nameof(SendSurface), () => _session.SendTextAsync(text));
+    }
+
+    private void OnSurfaceClose(object? sender, EventArgs e)
+    {
+        SurfaceSent.Text = "";
+        _surface.Clear();
+    }
+
+    private async void OnSurfaceOpen(object? sender, EventArgs e)
+    {
+        try { if (!string.IsNullOrWhiteSpace(_surface.Src)) await Launcher.OpenAsync(_surface.Src); }
+        catch (Exception ex) { SurfaceSent.Text = "could not open: " + ex.Message; }
+    }
+
+    private void OnLoveChanged(object? sender, ValueChangedEventArgs e)
+    {
+        LoveValue.Text = $"{e.NewValue:0}";
+        if (_syncingMeters) return;
+        _surface.Nudge(love: e.NewValue);
+    }
+
+    private void OnOrgasmChanged(object? sender, ValueChangedEventArgs e)
+    {
+        OrgasmValue.Text = $"{e.NewValue:0}";
+        if (_syncingMeters) return;
+        _surface.Nudge(orgasm: e.NewValue);
+    }
+
+    private void OnSendLove(object? sender, EventArgs e) => _ = SendSurface(StimulusLine());
+
+    private void OnSendOrgasm(object? sender, EventArgs e) => _ = SendSurface(StimulusLine());
+
+    /// <summary>What the meters say, in one line the agent can read and answer.</summary>
+    private string StimulusLine()
+    {
+        var parts = new List<string>();
+        if (LoveSlider.IsVisible) parts.Add($"love {LoveSlider.Value:0}");
+        if (OrgasmSlider.IsVisible) parts.Add($"orgasm {OrgasmSlider.Value:0}");
+        if (parts.Count == 0) parts.Add("love " + LoveSlider.Value.ToString("0"));
+        return "[Stimulus] " + string.Join(", ", parts);
+    }
+
+    private static string FormatWait(TimeSpan t) => t.TotalMinutes >= 1
+        ? $"{(int)t.TotalMinutes}m {t.Seconds:00}s"
+        : $"{(int)t.TotalSeconds}s";
 
     private void ApplyLamps()
     {
@@ -385,11 +780,29 @@ public partial class MainPage : ContentPage
         PresenceDot.Color = Tone(presence);
         PresenceText.Text = presence switch
         {
-            StatusTone.Amber => "Connecting",
-            StatusTone.Red => "Offline",
-            _ => "Connected"
+            StatusTone.Amber => "CONNECTING",
+            StatusTone.Red => "OFFLINE",
+            _ => "CONNECTED"
         };
         PresenceText.TextColor = Tone(presence);
+        // Name the backend on the badge. A 9px dot reading "Connected" was too easy to miss
+        // (Master, 2026-11-22: "I can't see the Presence chip is lit ... make it more obvious").
+        PresenceBackend.Text = presence == StatusTone.Green
+            ? $"{_session.AgentLabel} · {_session.BackendLabel}"
+            : $"{_session.AgentLabel} · not connected";
+        PresenceBackend.TextColor = Tone(presence);
+        PresenceBadge.BackgroundColor = presence switch
+        {
+            StatusTone.Green => Color.FromArgb("#12291C"),
+            StatusTone.Amber => Color.FromArgb("#2A2415"),
+            _ => Color.FromArgb("#2A1518")
+        };
+        PresenceBadge.Stroke = new SolidColorBrush(presence switch
+        {
+            StatusTone.Green => Color.FromArgb("#2E9E5B"),
+            StatusTone.Amber => Color.FromArgb("#B8860B"),
+            _ => Color.FromArgb("#C0392B")
+        });
 
         var activity = StatusTones.Activity(_session.Activity, _session.Connected);
         ActivityDot.Color = Tone(activity);
@@ -499,7 +912,9 @@ public partial class MainPage : ContentPage
         if (string.IsNullOrWhiteSpace(text) || !_session.Connected)
             return;
         ChatInput.Text = "";
-        await GuardUi(nameof(OnSend), () => _session.SendTextAsync(text));
+        // A typed address sends the turn to HER and moves the conversation there for the next turn,
+        // which is how more than two voices share one thread without it ever being vague who spoke.
+        await GuardUi(nameof(OnSend), () => _session.SendAddressedAsync(text));
     }
 
     private async void OnSaveSoul(object? sender, EventArgs e) => await GuardUi(nameof(OnSaveSoul), () => _session.SaveSoulAsync(SoulText.Text ?? ""));
@@ -572,6 +987,7 @@ public partial class MainPage : ContentPage
         try
         {
             if (ErrorBanner is null || ErrorText is null || string.IsNullOrEmpty(_session.Error)) return;
+            // Errors are always shown: there is no switch for them, on purpose (Master, 2026-11-23).
             ErrorBanner.IsVisible = true;
             ErrorText.Text = _session.Error;
         }
