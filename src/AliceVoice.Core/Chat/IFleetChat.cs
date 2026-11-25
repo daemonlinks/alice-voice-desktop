@@ -50,13 +50,28 @@ public sealed class HermesApiFleetChat : IFleetChat, IDisposable
     private readonly ConcurrentDictionary<string, (DateTime At, bool Ok)> _reachCache = new();
     private static readonly TimeSpan ReachCacheTtl = TimeSpan.FromSeconds(45);
 
-    public HermesApiFleetChat(string baseUrl, string? sharedKey = null, HttpClient? http = null)
+    /// <summary>
+    /// How long one member turn may run before this client gives up. A member turn is a FULL agent
+    /// turn since Master's 2026-11-22 rule that a backed Hermes agent has no toolset limits, so it
+    /// can legitimately chain a dozen tool calls. Measured that day: the old 120 s ceiling abandoned
+    /// a turn the brain was still working on (it finished at 2 m 20 s, 40 s after the app stopped
+    /// listening) and the app logged "The request was canceled due to the configured
+    /// HttpClient.Timeout of 120 seconds elapsing." The siblings are looser - BeastBridgeClient
+    /// waits 5 minutes and AllTalk 180 s - so 120 s was the odd one out, not the house standard.
+    /// </summary>
+    public static readonly TimeSpan DefaultTurnTimeout = TimeSpan.FromSeconds(300);
+
+    public HermesApiFleetChat(string baseUrl, string? sharedKey = null, HttpClient? http = null,
+        TimeSpan? turnTimeout = null)
     {
         _baseUrl = baseUrl.TrimEnd('/');
         _sharedKeyExplicit = !string.IsNullOrEmpty(sharedKey);
         _sharedKey = sharedKey ?? ApiKeyResolver.Resolve();
-        _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(120) };
+        _http = http ?? new HttpClient { Timeout = turnTimeout ?? DefaultTurnTimeout };
     }
+
+    /// <summary>The per-turn ceiling this client actually enforces (its HttpClient's timeout).</summary>
+    public TimeSpan TurnTimeout => _http.Timeout;
 
     public bool HasApiKey => !string.IsNullOrEmpty(_sharedKey);
 

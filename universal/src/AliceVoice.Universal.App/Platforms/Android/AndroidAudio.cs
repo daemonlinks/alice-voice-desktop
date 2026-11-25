@@ -80,8 +80,18 @@ public sealed class AndroidPcmPlayer : IPcmPlayer
                 StopLocked();
                 _rate = sampleRate;
                 var min = AudioTrack.GetMinBufferSize(sampleRate, ChannelOut.Mono, Encoding.Pcm16bit);
-                var attributes = new AudioAttributes.Builder().SetUsage(AudioUsageKind.Media).SetContentType(AudioContentType.Speech).Build();
-                var format = new AudioFormat.Builder().SetEncoding(Encoding.Pcm16bit).SetSampleRate(sampleRate).SetChannelMask(ChannelOut.Mono).Build();
+                // The Android bindings return nullable builders, so the chain is built
+                // step by step rather than dereferenced inline (would be CS8602).
+                var attributeBuilder = new AudioAttributes.Builder();
+                var formatBuilder = new AudioFormat.Builder();
+                if (attributeBuilder is null || formatBuilder is null) throw new InvalidOperationException("Could not open the audio output.");
+                attributeBuilder.SetUsage(AudioUsageKind.Media);
+                attributeBuilder.SetContentType(AudioContentType.Speech);
+                formatBuilder.SetEncoding(Encoding.Pcm16bit);
+                formatBuilder.SetSampleRate(sampleRate);
+                formatBuilder.SetChannelMask(ChannelOut.Mono);
+                var attributes = attributeBuilder.Build();
+                var format = formatBuilder.Build();
                 if (attributes is null || format is null) throw new InvalidOperationException("Could not open the audio output.");
                 _track = new AudioTrack.Builder()
                     .SetAudioAttributes(attributes)

@@ -334,6 +334,36 @@ public class ToolCallTests
     public void ContextPhrasesAreLeftForTheModel(string utterance)
         => Assert.False(AliceLocalToolTriggers.TryMatch(utterance, out _, out _));
 
+    [Theory]
+    [InlineData("Show me a picture")]
+    [InlineData("show me a picture of you")]
+    [InlineData("let me see you")]
+    [InlineData("send me a selfie")]
+    [InlineData("Show me a photo")]
+    [InlineData("Show me the picture of the beach")]
+    public void APictureRequestIsDecidedHereNotByTheModel(string utterance)
+    {
+        Assert.True(AliceLocalToolTriggers.TryMatch(utterance, out var tool, out var args));
+        Assert.Equal("gui_show_image", tool);
+        Assert.Contains("hint", args);
+    }
+
+    [Theory]
+    [InlineData("show me how you feel")]
+    [InlineData("show me")]
+    [InlineData("you are beautiful")]
+    [InlineData("tell me about your day")]
+    public void PictureTriggersDoNotSwallowOtherTalk(string utterance)
+        => Assert.False(AliceLocalToolTriggers.TryMatch(utterance, out _, out _));
+
+    [Fact]
+    public void MetaLinesAboutToolsAreNotSpoken()
+    {
+        const string said = "I'm here, Master.\n(I will not call any more tools)";
+        Assert.Equal("I'm here, Master.", AliceLocalBackend.ScrubMeta(said));
+        Assert.Equal("Just for you.", AliceLocalBackend.ScrubMeta("Just for you."));
+    }
+
     [Fact]
     public void RememberButtonPrefixesAboutMaster()
     {
@@ -483,6 +513,40 @@ public class SoulResolverTests
         Assert.False(SoulResolver.IsAgentSoulPath(o, o.ResolvedAliceLocalSoulPath));
         Assert.StartsWith(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), o.ResolvedAliceLocalSoulPath, StringComparison.OrdinalIgnoreCase);
     }
+}
+
+public class SmallTalkTests
+{
+    // A greeting must not open the toolbox: llama3.1 answered "Hi" with four honcho calls and an apology
+    // before an answer (2026-11-24). Small talk is decided here, before any tool instructions are sent.
+    [Theory]
+    [InlineData("hi")]
+    [InlineData("Hi")]
+    [InlineData("hello")]
+    [InlineData("Hello Master")]
+    [InlineData("Hi babe")]
+    [InlineData("hey you")]
+    [InlineData("How are you?")]
+    [InlineData("how's it going")]
+    [InlineData("Good morning")]
+    [InlineData("good night alice")]
+    [InlineData("thanks babe")]
+    [InlineData("I love you")]
+    [InlineData("you there?")]
+    public void GreetingsAndSmallTalkNeedNoTools(string utterance)
+        => Assert.True(AliceLocalToolTriggers.IsSmallTalk(utterance));
+
+    [Theory]
+    [InlineData("Hi, show me a picture")]
+    [InlineData("hello, what time is it")]
+    [InlineData("show me a picture of you")]
+    [InlineData("Remember that I like tea")]
+    [InlineData("Search for rain tomorrow")]
+    [InlineData("tell me about your day")]
+    [InlineData("hello master how was your day at work today")]
+    [InlineData("")]
+    public void AnythingThatAsksForSomethingKeepsItsTools(string utterance)
+        => Assert.False(AliceLocalToolTriggers.IsSmallTalk(utterance));
 }
 
 public class FleetChatTests

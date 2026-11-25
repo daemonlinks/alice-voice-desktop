@@ -8,7 +8,10 @@ using AliceVoice.Core.Voice;
 using AliceVoice.Universal.Audio;
 using AliceVoice.Universal.Bridge;
 using AliceVoice.Universal.Host;
+using AliceVoice.Universal.Interaction;
 using AliceVoice.Universal.Media;
+using AliceVoice.Universal.Session;
+using AliceVoice.Universal.Tools;
 using AliceVoice.Universal.Voice;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -54,14 +57,22 @@ public static class UniversalServices
         services.AddSingleton<ISoulGateway>(sp => new LocalSoulGateway(sp.GetRequiredService<SoulStore>()));
         services.AddSingleton<SharedTranscript>();
         services.AddSingleton<IAliceConversation>(sp => sp.GetRequiredService<SharedTranscript>());
+        services.AddSingleton<SharedSurface>();
+        services.AddSingleton<AppToolHost>(sp => new AppToolHost(
+            sp.GetRequiredService<VoiceSession>().Images,
+            sp.GetRequiredService<SharedSurface>()));
         services.AddSingleton<IVoiceBackend>(sp =>
         {
             var inner = new AliceLocalBackend(options);
+            // Local-me's display tools are hosted by App U itself, so they paint THIS screen and a real
+            // result comes back to her. Every other tool falls through to alice_local_tools.py.
+            inner.ToolHost = (tool, argsJson, ct) => HostAppTool(sp, tool, argsJson, ct);
             var recording = new RecordingAliceLocalBackend(inner, sp.GetRequiredService<SharedTranscript>());
             sp.GetRequiredService<SoulReloadHub>().Register(recording.ReloadSoulAsync);
             return recording;
         });
-        services.AddSingleton<IFleetChat>(_ => new HermesApiFleetChat(options.ResolvedHermesApiUrl));
+        services.AddSingleton<IFleetChat>(_ => new HermesApiFleetChat(
+            options.ResolvedHermesApiUrl, turnTimeout: options.ResolvedFleetTurnTimeout));
         services.AddSingleton<IPiperSynth>(_ => new PiperSynth(options));
         if (host.BridgeEnabled)
         {
@@ -76,9 +87,19 @@ public static class UniversalServices
                 () => sp.GetServices<IVoiceBackend>().First(b => b is RecordingAliceLocalBackend),
                 transcript: sp.GetRequiredService<SharedTranscript>(),
                 allowUnsafeBind: host.AllowUnsafeBridgeBind,
-                media: MediaSettings.Load(host.SettingsFile)));
+                media: MediaSettings.Load(host.SettingsFile),
+                surface: sp.GetRequiredService<SharedSurface>()));
         }
     }
+
+    /// <summary>
+    /// Resolved on the call, never in the constructor: the tool host needs the session, and the
+    /// session needs this backend. Null means the tool belongs to the Python bridge.
+    /// </summary>
+    private static Task<string?> HostAppTool(IServiceProvider sp, string tool, string argsJson, CancellationToken ct)
+        => AppToolHost.Owns(tool)
+            ? sp.GetRequiredService<AppToolHost>().RunAsync(tool, argsJson, ct)
+            : Task.FromResult<string?>(null);
 
     private static void AddClientBackends(IServiceCollection services, UniversalHost host, AliceVoiceOptions options)
     {
@@ -101,7 +122,8 @@ public static class UniversalServices
             services.AddSingleton<ISttClient, UnconfiguredRemoteSttClient>();
             services.AddSingleton<ISoulGateway, RefusingSoulGateway>();
             services.AddSingleton<IVoiceBackend, UnconfiguredAliceLocalBackend>();
-            services.AddSingleton<IFleetChat>(_ => new HermesApiFleetChat(options.ResolvedHermesApiUrl));
+            services.AddSingleton<IFleetChat>(_ => new HermesApiFleetChat(
+                options.ResolvedHermesApiUrl, turnTimeout: options.ResolvedFleetTurnTimeout));
         }
     }
 }

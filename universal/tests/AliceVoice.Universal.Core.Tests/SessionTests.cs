@@ -32,7 +32,7 @@ public class VoiceSessionTests
         Assert.Contains("1–2", fx.Manager.LastOptions.StyleHint);
         Assert.Contains(fx.Session.Transcript, t => t.Kind == TranscriptKind.User && t.Text.Contains("hello there"));
         Assert.Contains("Sapi:Hello back", fx.Speech.Spoken);
-        Assert.Equal("Replied from Alice LOCAL", fx.Session.StatusText);
+        Assert.Equal("Replied from alice_voice LOCAL", fx.Session.StatusText);
         Assert.Equal(1, fx.Session.Latency.Items.Count);
     }
 
@@ -90,15 +90,44 @@ public class VoiceSessionTests
     }
 
     [Fact]
-    public async Task LocalAliceToolJsonIsStrippedButNotRun()
+    public async Task LocalAliceCanShowAPictureByNameAndTheJsonNeverReachesTheWords()
     {
-        using var images = new AliceVoice.Universal.Media.ImageDisplay(new AliceVoice.Universal.Media.MediaSettings(), null, null, _ => { });
+        var root = Directory.CreateTempSubdirectory("av-local-").FullName;
+        File.WriteAllBytes(Path.Combine(root, "quiet-morning.png"), MediaTests.Png());
+        var settings = new AliceVoice.Universal.Media.MediaSettings { Roots = new[] { root } };
+        using var images = new AliceVoice.Universal.Media.ImageDisplay(settings, new AliceVoice.Universal.Media.MediaShare(settings), null, _ => { });
         var fx = await Fixture.Start(images: images);
-        fx.Manager.Reply = "Hi {\"tool\":\"gui_show_image\",\"args\":{\"src\":\"/x/a.png\"}}";
-        await fx.Session.SendTextAsync("hello");
+        // Local-me names a picture - she cannot be expected to produce an absolute path, which is
+        // why the name form exists. This is what her web-page self does, and now she does it here.
+        fx.Manager.Reply = "Here you are. {\"tool\":\"gui_show_image\",\"args\":{\"file\":\"quiet-morning.png\",\"mode\":\"stage\"}}";
+        await fx.Session.SendTextAsync("show me the quiet one");
         await images.WhenIdle();
+
+        Assert.NotNull(images.State.Current);
+        Assert.DoesNotContain(fx.Speech.Spoken, s => s.Contains('{') || s.Contains("tool"));
+        Assert.Contains(fx.Speech.Spoken, s => s.EndsWith("Here you are."));
+        Assert.DoesNotContain(fx.Session.Transcript, t => t.Text.Contains("gui_"));
+        Directory.Delete(root, true);
+    }
+
+    [Fact]
+    public async Task ANameMatchingTwoPicturesIsRefusedRatherThanGuessedAt()
+    {
+        var root = Directory.CreateTempSubdirectory("av-amb-").FullName;
+        foreach (var sub in new[] { "a", "b" })
+        {
+            Directory.CreateDirectory(Path.Combine(root, sub));
+            File.WriteAllBytes(Path.Combine(root, sub, "holiday.png"), MediaTests.Png());
+        }
+        var settings = new AliceVoice.Universal.Media.MediaSettings { Roots = new[] { root } };
+        using var images = new AliceVoice.Universal.Media.ImageDisplay(settings, new AliceVoice.Universal.Media.MediaShare(settings), null, _ => { });
+        var fx = await Fixture.Start(images: images);
+        fx.Manager.Reply = "{\"tool\":\"gui_show_image\",\"args\":{\"file\":\"holiday\"}}";
+        await fx.Session.SendTextAsync("holiday");
+        await images.WhenIdle();
+
         Assert.Null(images.State.Current);
-        Assert.DoesNotContain(fx.Speech.Spoken, s => s.Contains('{'));
+        Directory.Delete(root, true);
     }
 
     [Fact]
@@ -213,7 +242,7 @@ public class VoiceSessionTests
 
         Assert.Null(fx.Session.Error);
         Assert.Contains(fx.Session.Transcript, t => t.Kind == TranscriptKind.Alice && t.Text == "Hello back" && t.ShowRemember);
-        Assert.Equal("Replied from Alice LOCAL", fx.Session.StatusText);
+        Assert.Equal("Replied from alice_voice LOCAL", fx.Session.StatusText);
     }
 
     [Fact]
@@ -339,7 +368,7 @@ public class VoiceSessionTests
         Assert.Contains(fx.Session.Transcript, t => t.Text.Contains("first question"));
         Assert.Contains(fx.Session.Transcript, t => t.Text.Contains("second question"));
         Assert.Contains(fx.Session.Transcript, t => t.Kind == TranscriptKind.Alice && t.Text == "Hello back");
-        Assert.Equal("Replied from Alice LOCAL", fx.Session.StatusText);
+        Assert.Equal("Replied from alice_voice LOCAL", fx.Session.StatusText);
     }
 
     [Fact]

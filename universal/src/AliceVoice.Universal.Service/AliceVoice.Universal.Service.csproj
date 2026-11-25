@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+		<OutputType>Exe</OutputType>
+		<SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<AssemblyName>AliceVoice.Universal.Service</AssemblyName>
+		<RootNamespace>AliceVoice.Universal.Service</RootNamespace>
+		<!-- A Windows service has no console: NSSM starts this, nothing is shown on screen. -->
+		<UseWindowsForms>false</UseWindowsForms>
+		<UseWPF>false</UseWPF>
+		<InvariantGlobalization>false</InvariantGlobalization>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\AliceVoice.Universal.Core\AliceVoice.Universal.Core.csproj" />
+		<!-- The Beast's own speech and inference, so this service can serve STT and Piper to any frontend. -->
+		<ProjectReference Include="..\..\..\src\AliceVoice.Audio\AliceVoice.Audio.csproj" />
+		<ProjectReference Include="..\..\..\src\AliceVoice.Inference\AliceVoice.Inference.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<Content Include="..\..\..\scripts\*.py" Link="scripts\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+	</ItemGroup>
+
+</Project>

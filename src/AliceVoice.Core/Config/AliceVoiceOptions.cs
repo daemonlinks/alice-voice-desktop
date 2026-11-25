@@ -39,6 +39,14 @@ public sealed class AliceVoiceOptions
     public string? OllamaUrl { get; set; }
     public string? HermesApiUrl { get; set; }
 
+    /// <summary>
+    /// How long one fleet-member turn may run before the client gives up
+    /// (ALICEVOICE_FLEET_TIMEOUT, seconds; default 300, clamped 30..3600). A member turn is a
+    /// full agent turn, so the old 120 s ceiling was too short: on 2026-11-22 the app abandoned
+    /// a turn the brain was still working on. Raise the clamp if a turn ever needs longer.
+    /// </summary>
+    public int? FleetTurnTimeoutSeconds { get; set; }
+
     /// <summary>faster-whisper model name (ALICEVOICE_STT_MODEL). Default large-v3.</summary>
     public string? SttModel { get; set; }
 
@@ -123,6 +131,8 @@ public sealed class AliceVoiceOptions
     [JsonIgnore] public string ResolvedAllTalkUrl => AllTalkUrl ?? "http://127.0.0.1:7851";
     [JsonIgnore] public string ResolvedOllamaUrl => OllamaUrl ?? "http://localhost:11434";
     [JsonIgnore] public string ResolvedHermesApiUrl => HermesApiUrl ?? "http://127.0.0.1:8643";
+    [JsonIgnore] public TimeSpan ResolvedFleetTurnTimeout =>
+        TimeSpan.FromSeconds(Math.Clamp(FleetTurnTimeoutSeconds ?? 300, 30, 3600));
     [JsonIgnore] public string ResolvedSttModel => SttModel ?? "large-v3";
     [JsonIgnore] public string ResolvedSttComputeType => SttComputeType ?? "int8_float32";
     [JsonIgnore] public string ResolvedSttCpuModel => SttCpuModel ?? "base";
@@ -168,6 +178,7 @@ public sealed class AliceVoiceOptions
         o.AllTalkUrl = Env(env, "ALICEVOICE_ALLTALK_URL") ?? o.AllTalkUrl;
         o.OllamaUrl = Env(env, "ALICEVOICE_OLLAMA_URL") ?? o.OllamaUrl;
         o.HermesApiUrl = Env(env, "ALICEVOICE_HERMES_URL") ?? o.HermesApiUrl;
+        if (int.TryParse(Env(env, "ALICEVOICE_FLEET_TIMEOUT"), out var ft)) o.FleetTurnTimeoutSeconds = ft;
         o.SttModel = Env(env, "ALICEVOICE_STT_MODEL") ?? o.SttModel;
         o.SttComputeType = Env(env, "ALICEVOICE_STT_COMPUTE") ?? o.SttComputeType;
         o.SttCpuModel = Env(env, "ALICEVOICE_STT_CPU_MODEL") ?? o.SttCpuModel;

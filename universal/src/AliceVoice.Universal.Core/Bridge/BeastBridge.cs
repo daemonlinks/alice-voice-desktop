@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AliceVoice.Core.Chat;
 using AliceVoice.Core.Config;
 using AliceVoice.Core.Logging;
@@ -8,7 +9,9 @@ using AliceVoice.Core.Stt;
 using AliceVoice.Core.Voice;
 using AliceVoice.Universal.Audio;
 using AliceVoice.Universal.Host;
+using AliceVoice.Universal.Interaction;
 using AliceVoice.Universal.Media;
+using AliceVoice.Universal.Tools;
 using AliceVoice.Universal.Voice;
 using Serilog;
 
@@ -43,6 +46,17 @@ public sealed class BeastBridge : IAsyncDisposable
     private readonly MediaSettings _media;
     private readonly MediaShare _share;
 
+    /// <summary>What should be on screen, held by the service and served over /v1/media. A frontend paints it.</summary>
+    private readonly ImageDisplay _images;
+
+    /// <summary>The service's own tools - the same implementation App U's local leg calls.</summary>
+    private readonly AppToolHost _tools;
+
+    /// <summary>The shared middle of the conversation screen, served over /v1/app/surface.</summary>
+    private readonly SharedSurface _surface;
+
+    private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
+
     private HttpListener? _listener;
     private CancellationTokenSource? _cts;
     private Task? _loop;
@@ -51,10 +65,17 @@ public sealed class BeastBridge : IAsyncDisposable
 
     public BeastBridge(AliceVoiceOptions options, ISttClient stt, ISoulGateway soul, IPiperSynth piper, string host, int port, SoulReloadHub? hub = null,
         Func<IVoiceBackend>? localFactory = null, Func<IFleetChat>? fleetFactory = null, SharedTranscript? transcript = null, bool allowUnsafeBind = false,
-        MediaSettings? media = null)
+        MediaSettings? media = null, SharedSurface? surface = null)
     {
         _media = media ?? MediaSettings.Default;
         _share = new MediaShare(_media);
+        // The service owns what should be on screen, and the rules that decide it. Pictures are held
+        // here and served over /v1/media, so any frontend - App U's own window, the web page, a phone,
+        // something not written yet - can show the same thing from the same place. App U's window
+        // still paints its own copy until it is switched to read this surface; that is the one
+        // follow-up, and it is deliberately not half-done here.
+        _images = new ImageDisplay(_media, _share, null, note => Log.Information("App display: {Note}", note));
+        _tools = new AppToolHost(_images, _surface = surface ?? new SharedSurface());
         _options = options;
         _stt = stt;
         _soul = soul;
@@ -122,6 +143,55 @@ public sealed class BeastBridge : IAsyncDisposable
         if (method == "GET" && path == "/v1/health")
         {
             await WriteJson(ctx.Response, 200, new BridgeHealth(true, _stt.Status, Fleet().HasApiKey));
+            return;
+        }
+        // ---- the app surface: what any frontend or agent may ask this service --------------------
+        // Interrogate, then control, then a real result - the same shape the web page's tool bridge
+        // returns, so a frontend written against this works against either.
+        if (method == "GET" && path == "/v1/app")
+        {
+            await WriteJson(ctx.Response, 200, AppState());
+            return;
+        }
+        if (method == "GET" && path == "/v1/app/tools")
+        {
+            await WriteJson(ctx.Response, 200, AppTools());
+            return;
+        }
+        if (method == "GET" && path == "/v1/app/media")
+        {
+            var asked = int.TryParse(ctx.Request.QueryString["n"], out var n) ? n : 12;
+            var listed = await _tools.RunAsync(AppToolHost.ListPictures, new JsonObject { ["n"] = asked }.ToJsonString(), ct);
+            await WriteJson(ctx.Response, 200, Node(listed ?? "{}"));
+            return;
+        }
+        if (method == "GET" && path == "/v1/app/surface")
+        {
+            await WriteJson(ctx.Response, 200, Node(_surface.ToJson().ToJsonString()));
+            return;
+        }
+        if (method == "POST" && path == "/v1/app/display")
+        {
+            var body = Encoding.UTF8.GetString(await ReadBody(ctx.Request, MaxBodyBytes, ct));
+            var call = ParseCall(body);
+            if (call is null)
+            {
+                await WriteJson(ctx.Response, 400, Node(new JsonObject { ["error"] = "bad args: tool" }.ToJsonString()));
+                return;
+            }
+            var result = await _tools.RunAsync(call.Value.Tool, call.Value.ArgsJson, ct);
+            if (result is null)
+            {
+                // Honest refusal rather than silence: this service runs the display tools, and it says
+                // so, so a caller can tell a typo from a fault.
+                await WriteJson(ctx.Response, 400, Node(new JsonObject
+                {
+                    ["error"] = "not a display tool: " + call.Value.Tool,
+                    ["tools"] = new JsonArray("gui_list_pictures", "gui_show_image", "gui_image_clear", "gui_surface", "gui_surface_clear"),
+                }.ToJsonString()));
+                return;
+            }
+            await WriteJson(ctx.Response, 200, Node(result));
             return;
         }
         if (method == "POST" && path == "/v1/stt/warmup")
@@ -270,6 +340,71 @@ public sealed class BeastBridge : IAsyncDisposable
         }
 
         await WriteJson(ctx.Response, 404, new OkResponse(false, "not found"));
+    }
+
+    /// <summary>
+    /// What this service is and what it is allowed to do. Deliberately no filesystem paths: a frontend
+    /// or an agent is told how many roots there are, never where they are.
+    /// </summary>
+    private JsonObject AppState()
+    {
+        var kinds = new JsonArray();
+        foreach (var kind in _media.AllowedKinds.OrderBy(k => k.ToString())) kinds.Add(kind.ToString().ToLowerInvariant());
+        var onScreen = _images.State.Current is { } current
+            ? new JsonObject { ["id"] = current.Id, ["mode"] = current.Mode.ToString().ToLowerInvariant(), ["kind"] = current.Kind.ToString().ToLowerInvariant(), ["caption"] = current.Caption }
+            : null;
+        return new JsonObject
+        {
+            ["service"] = "alice-voice-bridge",
+            ["version"] = typeof(BeastBridge).Assembly.GetName().Version?.ToString() ?? "0.0.0",
+            ["host"] = _host,
+            ["port"] = _port,
+            ["uptime_s"] = (int)(DateTimeOffset.UtcNow - _startedAt).TotalSeconds,
+            ["stt"] = _stt.Status,
+            ["piper_voices"] = _piper.ListVoices().Count,
+            ["media"] = new JsonObject
+            {
+                ["enabled"] = _media.Enabled,
+                ["sources"] = _media.Sources.ToString(),
+                ["https"] = _media.AllowHttps,
+                ["max_mb"] = _media.MaxBytes / (1024 * 1024),
+                ["duration_s"] = _media.DefaultDurationS,
+                ["kinds"] = kinds,
+                ["roots"] = _media.Roots.Count,
+            },
+            ["on_screen"] = onScreen,
+            ["tools"] = AppTools()["tools"]?.DeepClone(),
+        };
+    }
+
+    /// <summary>What a caller may ask for, and what each one does. Discovery, not documentation that drifts.</summary>
+    private static JsonObject AppTools() => new()
+    {
+        ["tools"] = new JsonArray
+        {
+            new JsonObject { ["name"] = "gui_list_pictures", ["args"] = new JsonObject { ["n"] = "1..40, default 12" }, ["does"] = "names of pictures that may be shown, never paths" },
+            new JsonObject { ["name"] = "gui_show_image", ["args"] = new JsonObject { ["src"] = "absolute path or https URL", ["file"] = "a name from gui_list_pictures", ["mode"] = "stage|card|backdrop", ["caption"] = "short line", ["keep"] = "true|false", ["duration_s"] = "seconds" }, ["does"] = "put a picture on screen, held by this service" },
+            new JsonObject { ["name"] = "gui_image_clear", ["args"] = new JsonObject { ["id"] = "optional" }, ["does"] = "take a picture back off the screen" },
+        },
+    };
+
+    /// <summary>A tool's own JSON, written through unchanged so the shape matches the web page exactly.</summary>
+    private static JsonNode Node(string json)
+    {
+        try { return JsonNode.Parse(json) ?? new JsonObject(); }
+        catch (JsonException) { return new JsonObject { ["error"] = "bad tool result" }; }
+    }
+
+    private static (string Tool, string ArgsJson)? ParseCall(string body)
+    {
+        try
+        {
+            if (JsonNode.Parse(body) is not JsonObject obj) return null;
+            var tool = obj["tool"]?.ToString();
+            if (string.IsNullOrWhiteSpace(tool)) return null;
+            return (tool, obj["args"] is { } args ? args.ToJsonString() : "{}");
+        }
+        catch (JsonException) { return null; }
     }
 
     private const string MediaPrefix = "/v1/media/";

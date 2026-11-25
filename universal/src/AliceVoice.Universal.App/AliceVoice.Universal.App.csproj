@@ -23,6 +23,12 @@
 		     Framework-dependent. An explicit RuntimeIdentifier of win-x64 makes restore look
 		     for Microsoft.NETCore.App.Runtime.Mono.win-x64 and fail with NU1102. -->
 		<WindowsPackageType>None</WindowsPackageType>
+		<!-- Every Android device we own, not just the arm64 ones. Phones and the SHIELD TVs are
+		     arm64, but older/cheaper handsets and tablets are 32-bit arm, and x64 covers tablets
+		     and ChromeOS. Without this the APK carries arm64-v8a alone and simply will not
+		     install anywhere else. Release carries all three; Debug stays single-ABI so the inner
+		     loop and fast deployment stay quick. -->
+		<RuntimeIdentifiers Condition="'$(TargetFramework)' == 'net10.0-android' and '$(Configuration)' == 'Release'">android-arm64;android-arm;android-x64</RuntimeIdentifiers>
 		<SelfContained Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">false</SelfContained>
 		<UseMonoRuntime Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">false</UseMonoRuntime>
 		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">26.0</SupportedOSPlatformVersion>

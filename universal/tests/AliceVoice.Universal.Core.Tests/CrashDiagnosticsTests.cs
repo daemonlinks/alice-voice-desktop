@@ -245,23 +245,34 @@ public sealed class CrashDiagnosticsTests
     public void ReenteredReportDoesNotRecurseAndStillPersistsTheOuterOne()
     {
         using var iso = new Isolated();
-        CrashDiagnostics.TestProbe = _ => CrashDiagnostics.Report("startup", new InvalidOperationException("nested-secret"), "reenter");
-        var path = CrashDiagnostics.Report("ui", new InvalidOperationException("outer-visible"), "first");
-        Assert.NotNull(path);
-        Assert.Contains("outer-visible", File.ReadAllText(path));
-        Assert.DoesNotContain("nested-secret", string.Join("\n", Directory.GetFiles(iso.Crash, "*.txt").Select(File.ReadAllText)));
-        Assert.Single(Directory.GetFiles(iso.Crash, "recursive-*.txt"));
+        try
+        {
+            CrashDiagnostics.TestProbe = _ => CrashDiagnostics.Report("startup", new InvalidOperationException("nested-secret"), "reenter");
+            var path = CrashDiagnostics.Report("ui", new InvalidOperationException("outer-visible"), "first");
+            Assert.NotNull(path);
+            Assert.Contains("outer-visible", File.ReadAllText(path));
+            Assert.DoesNotContain("nested-secret", string.Join("\n", Directory.GetFiles(iso.Crash, "*.txt").Select(File.ReadAllText)));
+            Assert.Single(Directory.GetFiles(iso.Crash, "recursive-*.txt"));
+        }
+        // TestProbe is process-wide. Left set, it hijacks any crash report another test class
+        // provokes on a parallel thread and makes it look like a re-entry, which fails that test
+        // instead of this one. Restore it always.
+        finally { CrashDiagnostics.TestProbe = null; }
     }
 
     [Fact]
     public void ProbeFailureStillPersists()
     {
         using var iso = new Isolated();
-        CrashDiagnostics.TestProbe = _ => throw new InvalidOperationException("probe blew up");
-        var path = CrashDiagnostics.Report("background", new InvalidOperationException("still-here"), "ctx");
-        Assert.NotNull(path);
-        Assert.Contains("still-here", File.ReadAllText(path!));
-        Assert.Contains("source: background", File.ReadAllText(path));
+        try
+        {
+            CrashDiagnostics.TestProbe = _ => throw new InvalidOperationException("probe blew up");
+            var path = CrashDiagnostics.Report("background", new InvalidOperationException("still-here"), "ctx");
+            Assert.NotNull(path);
+            Assert.Contains("still-here", File.ReadAllText(path!));
+            Assert.Contains("source: background", File.ReadAllText(path));
+        }
+        finally { CrashDiagnostics.TestProbe = null; }
     }
 
     [Fact]
